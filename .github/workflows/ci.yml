@@ -86,4 +86,6 @@ jobs:
           TURNSTILE_SECRET_KEY: ci
           TURNSTILE_ALLOWED_HOSTNAMES: ci.invalid
           PRIMA_ADMIN_PASSWORD: ci
+          PRIMA_MANAGER_EMAIL: manager@ci.invalid
+          PRIMA_MANAGER_PASSWORD: ci
         run: docker compose -f compose.yaml -f compose.production.yaml config -q
