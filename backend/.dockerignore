@@ -3,3 +3,4 @@ vendor
 node_modules
 storage/logs/*
 storage/app/private/*
+bootstrap/cache/*.php

@@ -17,6 +17,8 @@ import {
   Bell,
   Database,
   Factory,
+  Eye,
+  EyeOff,
   FilePlus2,
   FileText,
   LayoutDashboard,
@@ -41,9 +43,13 @@ import {
   ChecklistDataPage,
   ChecklistEditor,
   DocumentsPage,
+  EkimNotificationsPage,
+  ForgotPasswordPage,
+  ManagerApprovalHistory,
   MyVehiclesPage,
   NotificationsPage,
   RegisterPage,
+  ResetPasswordPage,
   RegistrationsPage,
   SettingsPage,
   UsersPage,
@@ -53,7 +59,7 @@ import {
 } from "./Modules";
 
 const roleNames = {
-  admin: "Administrator",
+  admin: "SPV HSSE / Administrator Sistem",
   hsse: "Petugas HSSE",
   manager_hsse: "Manager HSSE",
   pengurus: "Pengurus Kendaraan",
@@ -179,8 +185,9 @@ function TurnstileCaptcha({ siteKey, resetKey, onVerify, onError }) {
   return <div className="turnstile-widget" ref={container} />;
 }
 
-function Login({ onLogin }) {
-  const [form, setForm] = useState({ username: "", password: "" });
+function Login({ onLogin, portal }) {
+  const [form, setForm] = useState({ email: "", password: "" });
+  const [showPassword, setShowPassword] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [captchaConfig, setCaptchaConfig] = useState(null);
@@ -213,7 +220,11 @@ function Login({ onLogin }) {
     setBusy(true);
     setError("");
     try {
-      const result = await api.login({ ...form, captcha_token: captchaToken });
+      const result = await api.login({
+        ...form,
+        portal,
+        captcha_token: captchaToken,
+      });
       onLogin(result.data);
     } catch (err) {
       setError(err.message);
@@ -234,16 +245,23 @@ function Login({ onLogin }) {
         </div>
         <div className="brand-lockup">
           <img
+            className="brand-prima-logo"
+            src={assetUrl("foto/logo-prima.png")}
+            alt="Logo PRIMA"
+          />
+          <div className="brand-divider" />
+          <div className="brand-partners">
+          <img
             className="brand-hsse-logo"
             src={assetUrl("foto/Logo HSSE 2022.png")}
             alt="Logo HSSE Integrated Terminal Bitung"
           />
-          <div className="brand-divider" />
           <img
             className="brand-pertamina-logo"
             src={assetUrl("foto/PT_Pertamina_Patra_Niaga.png")}
             alt="Pertamina Patra Niaga"
           />
+          </div>
         </div>
         <p className="eyebrow">PRIMA</p>
         <h1>Pertamina Checklist Mobil Tangki</h1>
@@ -262,10 +280,25 @@ function Login({ onLogin }) {
       </section>
       <section className="login-panel form-panel">
         <div className="login-form-wrap">
-          <p className="eyebrow red">Selamat datang</p>
-          <h2>Masuk ke PRIMA</h2>
+          <div className="login-mobile-brand">
+            <img src={assetUrl("foto/logo-prima.png")} alt="Logo PRIMA" />
+            <div>
+              <strong>PRIMA</strong>
+              <span>Pertamina Checklist Mobil Tangki</span>
+            </div>
+          </div>
+          <p className="eyebrow red">
+            {portal === "internal" ? "Portal internal" : "Portal transportir"}
+          </p>
+          <h2>
+            {portal === "internal"
+              ? "Masuk sebagai petugas"
+              : "Masuk sebagai transportir"}
+          </h2>
           <p className="muted">
-            Gunakan akun yang telah disetujui administrator.
+            {portal === "internal"
+              ? "Khusus SPV HSSE, Tim HSSE, dan Manager."
+              : "Kelola kendaraan dan dokumen menggunakan akun transportir yang telah disetujui."}
           </p>
           {error && (
             <div className="alert">
@@ -275,22 +308,41 @@ function Login({ onLogin }) {
           )}
           <form onSubmit={submit}>
             <label>
-              Username
+              Email
               <input
                 autoFocus
-                autoComplete="username"
-                value={form.username}
-                onChange={(e) => setForm({ ...form, username: e.target.value })}
+                type="email"
+                autoComplete="email"
+                value={form.email}
+                onChange={(e) => setForm({ ...form, email: e.target.value })}
+                required
               />
             </label>
             <label>
               Password
-              <input
-                type="password"
-                autoComplete="current-password"
-                value={form.password}
-                onChange={(e) => setForm({ ...form, password: e.target.value })}
-              />
+              <span className="password-input-wrap">
+                <input
+                  type={showPassword ? "text" : "password"}
+                  autoComplete="current-password"
+                  value={form.password}
+                  onChange={(e) =>
+                    setForm({ ...form, password: e.target.value })
+                  }
+                />
+                <button
+                  type="button"
+                  className="password-toggle"
+                  onClick={() => setShowPassword((value) => !value)}
+                  aria-label={
+                    showPassword ? "Sembunyikan password" : "Tampilkan password"
+                  }
+                  title={
+                    showPassword ? "Sembunyikan password" : "Tampilkan password"
+                  }
+                >
+                  {showPassword ? <EyeOff size={19} /> : <Eye size={19} />}
+                </button>
+              </span>
             </label>
             <div className="captcha-field">
               <span>Verifikasi keamanan</span>
@@ -332,9 +384,18 @@ function Login({ onLogin }) {
               {busy ? "Memproses…" : "Masuk"}
             </button>
           </form>
-          <p className="register-link">
-            Belum punya akun? <a href="#/register">Ajukan pendaftaran</a>
-          </p>
+          {portal === "transportir" && (
+            <p className="register-link">
+              Belum punya akun?{" "}
+              <a href="#/transportir/register">Ajukan pendaftaran</a>
+            </p>
+          )}
+          {portal === "transportir" && (
+            <p className="register-link">
+              Lupa password?{" "}
+              <a href="#/transportir/forgot-password">Reset melalui email</a>
+            </p>
+          )}
         </div>
       </section>
     </main>
@@ -342,11 +403,10 @@ function Login({ onLogin }) {
 }
 
 function menuFor(user) {
-  const common = [
-    { to: "/", label: "Dashboard", icon: LayoutDashboard },
-    { to: "/checklists", label: "Data checklist", icon: Database },
-  ];
-  if (["admin", "user", "hsse", "pengurus"].includes(user.role))
+  const common = [{ to: "/", label: "Dashboard", icon: LayoutDashboard }];
+  if (user.role !== "pengurus")
+    common.push({ to: "/checklists", label: "Data checklist", icon: Database });
+  if (["admin", "user", "hsse"].includes(user.role))
     common.push(
       { to: "/checklists/new/SPBU", label: "Formulir SPBU", icon: FilePlus2 },
       {
@@ -382,6 +442,12 @@ function menuFor(user) {
       to: "/approvals",
       label: "Persetujuan Checklist",
       icon: ClipboardCheck,
+    });
+  if (user.role === "manager_hsse")
+    common.push({
+      to: "/approval-history",
+      label: "Riwayat Persetujuan",
+      icon: ScrollText,
     });
   if (user.role === "admin")
     common.push(
@@ -422,8 +488,9 @@ function Shell({ user, onLogout }) {
       >
         <div className="sidebar-brand">
           <img
-            src={assetUrl("foto/PT_Pertamina_Patra_Niaga.png")}
-            alt="Pertamina"
+            className="sidebar-prima-logo"
+            src={assetUrl("foto/logo-prima.png")}
+            alt="Logo PRIMA"
           />
           <span>PRIMA · HSSE</span>
           <button
@@ -437,11 +504,13 @@ function Shell({ user, onLogout }) {
         </div>
         <nav>
           <p className="nav-label">Menu utama</p>
-          {menuFor(user).map(({ to, href, label, icon: Icon }) =>
+          {menuFor(user).map(
+            ({ to, href, label, icon: Icon, badge }) =>
             href ? (
               <a key={label} className="nav-link" href={assetUrl(href)}>
                 <Icon />
-                {label}
+                <span className="nav-link-label">{label}</span>
+                {!!badge && <span className="nav-badge">{badge > 99 ? "99+" : badge}</span>}
               </a>
             ) : (
               <NavLink
@@ -453,17 +522,18 @@ function Shell({ user, onLogout }) {
                 end={to === "/" || to === "/checklists"}
               >
                 <Icon />
-                {label}
+                <span className="nav-link-label">{label}</span>
+                {!!badge && <span className="nav-badge">{badge > 99 ? "99+" : badge}</span>}
               </NavLink>
             ),
           )}
         </nav>
         <div className="sidebar-user">
           <div className="avatar">
-            {(user.full_name || user.username).slice(0, 1).toUpperCase()}
+            {(user.full_name || user.email).slice(0, 1).toUpperCase()}
           </div>
           <div>
-            <strong>{user.full_name || user.username}</strong>
+            <strong>{user.full_name || user.email}</strong>
             <span>{roleNames[user.role] || user.role}</span>
           </div>
         </div>
@@ -487,9 +557,12 @@ function Shell({ user, onLogout }) {
           >
             <Menu />
           </button>
-          <div>
-            <strong>PRIMA</strong>
-            <span>Pertamina Checklist Mobil Tangki</span>
+          <div className="topbar-brand">
+            <img src={assetUrl("foto/logo-prima.png")} alt="" />
+            <div className="topbar-brand-copy">
+              <strong>PRIMA</strong>
+              <span>Pertamina Checklist Mobil Tangki</span>
+            </div>
           </div>
           <button className="button ghost" onClick={onLogout}>
             <LogOut size={16} />
@@ -500,15 +573,33 @@ function Shell({ user, onLogout }) {
           <Route path="/" element={<Dashboard user={user} />} />
           <Route
             path="/checklists"
-            element={<ChecklistDataPage user={user} />}
+            element={
+              user.role !== "pengurus" ? (
+                <ChecklistDataPage user={user} />
+              ) : (
+                <Navigate to="/" replace />
+              )
+            }
           />
           <Route
             path="/checklists/new/:jenis"
-            element={<ChecklistEditor user={user} />}
+            element={
+              user.role !== "pengurus" ? (
+                <ChecklistEditor user={user} />
+              ) : (
+                <Navigate to="/" replace />
+              )
+            }
           />
           <Route
             path="/checklists/:id"
-            element={<ChecklistEditor user={user} />}
+            element={
+              user.role !== "pengurus" ? (
+                <ChecklistEditor user={user} />
+              ) : (
+                <Navigate to="/" replace />
+              )
+            }
           />
           <Route
             path="/vehicles"
@@ -531,6 +622,16 @@ function Shell({ user, onLogout }) {
             }
           />
           <Route
+            path="/my-ekim-notifications"
+            element={
+              user.role === "pengurus" ? (
+                <EkimNotificationsPage />
+              ) : (
+                <Navigate to="/" replace />
+              )
+            }
+          />
+          <Route
             path="/vehicle-registration"
             element={
               user.role === "user" ? (
@@ -545,6 +646,16 @@ function Shell({ user, onLogout }) {
             element={
               ["admin", "hsse", "manager_hsse"].includes(user.role) ? (
                 <Approvals user={user} />
+              ) : (
+                <Navigate to="/" replace />
+              )
+            }
+          />
+          <Route
+            path="/approval-history"
+            element={
+              user.role === "manager_hsse" ? (
+                <ManagerApprovalHistory />
               ) : (
                 <Navigate to="/" replace />
               )
@@ -645,20 +756,28 @@ function Dashboard({ user }) {
   const { data, loading, error, reload } = useAsync(api.dashboard, []);
   if (loading) return <Loading />;
   if (error) return <ErrorState message={error} retry={reload} />;
-  const cards = [
-    ["Total checklist", data.checklists, Database, "navy"],
-    ["Draft", data.draft, FilePlus2, "slate"],
-    ["Menunggu HSSE", data.pending_hsse, ClipboardCheck, "amber"],
-    ["Menunggu Manager", data.signed_hsse, ShieldCheck, "blue"],
-    ["Disetujui", data.approved, CheckCircle2, "green"],
-  ];
+  const cards =
+    user.role === "pengurus"
+      ? [
+          ["Kendaraan dikelola", data.my_vehicles, Truck, "navy"],
+          ["Dokumen menunggu", data.my_pending_documents, FileText, "amber"],
+          ["Dokumen disetujui", data.my_approved_documents, CheckCircle2, "green"],
+          ["Dokumen ditolak", data.my_rejected_documents, AlertTriangle, "red"],
+        ]
+      : [
+          ["Total checklist", data.checklists, Database, "navy"],
+          ["Draft", data.draft, FilePlus2, "slate"],
+          ["Menunggu HSSE", data.pending_hsse, ClipboardCheck, "amber"],
+          ["Menunggu Manager", data.signed_hsse, ShieldCheck, "blue"],
+          ["Disetujui", data.approved, CheckCircle2, "green"],
+        ];
   if (user.role === "admin")
     cards.push(["Pengguna aktif", data.active_users, Users, "red"]);
   return (
     <main className="page">
       <PageHeader
         eyebrow="Ringkasan operasional"
-        title={`Selamat datang, ${user.full_name || user.username}`}
+        title={`Selamat datang, ${user.full_name || user.email}`}
         description="Pantau progres inspeksi dan status persetujuan mobil tangki."
         actions={
           <button className="button secondary" onClick={reload}>
@@ -691,19 +810,25 @@ function Dashboard({ user }) {
             <div>
               <strong>Notifikasi status EKIM</strong>
               <span>
-                Tindak lanjuti surat kedaluwarsa sebelum mengajukan inspeksi
-                ulang.
+                Pantau hasil penerbitan atau penolakan E-KIM kendaraan yang
+                Anda kelola.
               </span>
             </div>
           </div>
           {data.ekim_notifications.map((notification) => (
             <article
-              className={notification.is_new ? "is-new" : ""}
+              className={!notification.is_read ? "is-new" : ""}
               key={notification.id}
             >
               <strong>{notification.nomor_polisi}</strong>
               <span>{notification.pesan}</span>
-              <small>{notification.created_at}</small>
+              <small>
+                {notification.status === "issued"
+                  ? "E-KIM berhasil diterbitkan"
+                  : "E-KIM gagal diterbitkan/ditolak"}
+                {" · "}
+                {notification.created_at}
+              </small>
             </article>
           ))}
         </section>
@@ -758,17 +883,13 @@ function Dashboard({ user }) {
             <p className="eyebrow red">Akun aktif</p>
             <div className="profile-block">
               <div className="avatar large">
-                {(user.full_name || user.username)[0].toUpperCase()}
+                {(user.full_name || user.email)[0].toUpperCase()}
               </div>
-              <h3>{user.full_name || user.username}</h3>
+              <h3>{user.full_name || user.email}</h3>
               <span className="role-pill">
                 {roleNames[user.role] || user.role}
               </span>
               <dl>
-                <div>
-                  <dt>Username</dt>
-                  <dd>{user.username}</dd>
-                </div>
                 <div>
                   <dt>Email</dt>
                   <dd>{user.email || "—"}</dd>
@@ -856,7 +977,7 @@ function UserStatistics({ data }) {
 }
 
 function UserProfilePanel({ user }) {
-  const displayName = user.full_name || user.username;
+  const displayName = user.full_name || user.email;
   return (
     <section className="panel user-profile-panel">
       <div className="panel-title">
@@ -875,10 +996,6 @@ function UserProfilePanel({ user }) {
           <span className="role-pill">{roleNames[user.role] || user.role}</span>
         </div>
         <dl>
-          <div>
-            <dt>Username</dt>
-            <dd>{user.username}</dd>
-          </div>
           <div>
             <dt>Email</dt>
             <dd>{user.email || "—"}</dd>
@@ -965,43 +1082,8 @@ function ManagerStatistics({ data }) {
 }
 
 function PengurusStatistics({ data }) {
-  const total = Math.max(Number(data.checklists) || 0, 1);
-  const workflow = [
-    ["Draft", data.draft, "slate"],
-    ["Menunggu HSSE", data.pending_hsse, "amber"],
-    ["Menunggu Manager", data.signed_hsse, "blue"],
-    ["Disetujui", data.approved, "green"],
-    ["Ditolak", data.rejected, "red"],
-  ];
   return (
     <section className="user-statistics-grid pengurus-statistics-grid">
-      <article className="panel">
-        <div className="panel-title">
-          <div>
-            <p className="eyebrow red">Statistik checklist</p>
-            <h2>Distribusi status pemeriksaan</h2>
-          </div>
-          <BarChart3 />
-        </div>
-        <div className="workflow-bars">
-          {workflow.map(([label, value, tone]) => (
-            <div className="workflow-row" key={label}>
-              <div>
-                <span>{label}</span>
-                <strong>{value || 0}</strong>
-              </div>
-              <div className="workflow-track">
-                <span
-                  className={tone}
-                  style={{
-                    width: `${Math.min(((value || 0) / total) * 100, 100)}%`,
-                  }}
-                />
-              </div>
-            </div>
-          ))}
-        </div>
-      </article>
       <article className="panel user-data-summary">
         <div className="panel-title">
           <div>
@@ -1026,10 +1108,6 @@ function PengurusStatistics({ data }) {
           <div>
             <span>Dokumen ditolak</span>
             <strong>{data.my_rejected_documents || 0}</strong>
-          </div>
-          <div>
-            <span>Inspeksi bulan ini</span>
-            <strong>{data.bulan_ini || 0}</strong>
           </div>
         </div>
       </article>
@@ -1321,25 +1399,61 @@ export default function App() {
       .catch(() => setAuth({ loading: false, user: null }));
   }, []);
   const logout = async () => {
+    const loginPath =
+      auth.user?.role === "pengurus"
+        ? "/transportir/login"
+        : "/internal/login";
     try {
       await api.logout();
     } finally {
       setAuth({ loading: false, user: null });
-      navigate("/");
+      navigate(loginPath);
     }
   };
   if (auth.loading) return <Loading />;
   if (!auth.user)
     return (
       <Routes>
-        <Route path="/register" element={<RegisterPage />} />
-        <Route path="/verify/:value" element={<VerifyPage />} />
         <Route
-          path="*"
+          path="/internal/login"
           element={
-            <Login onLogin={(user) => setAuth({ loading: false, user })} />
+            <Login
+              portal="internal"
+              onLogin={(user) => setAuth({ loading: false, user })}
+            />
           }
         />
+        <Route
+          path="/transportir/login"
+          element={
+            <Login
+              portal="transportir"
+              onLogin={(user) => setAuth({ loading: false, user })}
+            />
+          }
+        />
+        <Route
+          path="/internal/register"
+          element={<Navigate to="/internal/login" replace />}
+        />
+        <Route
+          path="/transportir/register"
+          element={<RegisterPage portal="transportir" />}
+        />
+        <Route
+          path="/transportir/forgot-password"
+          element={<ForgotPasswordPage />}
+        />
+        <Route
+          path="/transportir/reset-password"
+          element={<ResetPasswordPage />}
+        />
+        <Route
+          path="/register"
+          element={<Navigate to="/transportir/register" replace />}
+        />
+        <Route path="/verify/:value" element={<VerifyPage />} />
+        <Route path="*" element={<Navigate to="/internal/login" replace />} />
       </Routes>
     );
   return <Shell user={auth.user} onLogout={logout} />;

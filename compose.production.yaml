@@ -4,7 +4,7 @@
 #   docker compose -f compose.yaml -f compose.production.yaml pull
 #   docker compose -f compose.yaml -f compose.production.yaml up -d
 #
-# PRIMA_IMAGE_TAG boleh diisi SHA commit untuk menyematkan versi tertentu
+# PRIMA_IMAGE_TAG boleh diisi `sha-<SHA commit>` untuk menyematkan versi tertentu
 # sekaligus mempermudah rollback.
 services:
   postgres:
@@ -28,6 +28,8 @@ services:
       TURNSTILE_ALLOWED_HOSTNAMES: ${TURNSTILE_ALLOWED_HOSTNAMES:?TURNSTILE_ALLOWED_HOSTNAMES wajib diisi}
       DB_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD wajib diisi}
       PRIMA_ADMIN_PASSWORD: ${PRIMA_ADMIN_PASSWORD:?PRIMA_ADMIN_PASSWORD wajib diisi}
+      PRIMA_MANAGER_PASSWORD: ${PRIMA_MANAGER_PASSWORD:?PRIMA_MANAGER_PASSWORD wajib diisi}
+      PRIMA_MANAGER_EMAIL: ${PRIMA_MANAGER_EMAIL:?PRIMA_MANAGER_EMAIL wajib diisi}
 
   scheduler:
     image: ${PRIMA_REGISTRY:-ghcr.io/vaniasaleletang07}/prima-backend:${PRIMA_IMAGE_TAG:-latest}

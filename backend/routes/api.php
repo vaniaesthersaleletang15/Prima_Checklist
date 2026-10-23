@@ -9,6 +9,8 @@ Route::prefix('v1')->group(function () {
     Route::get('/auth/captcha-config', [PrimaController::class, 'captchaConfig'])->middleware('throttle:60,1');
     Route::post('/auth/login', [PrimaController::class, 'login'])->middleware('throttle:login');
     Route::post('/auth/register', [PrimaController::class, 'register'])->middleware('throttle:6,1');
+    Route::post('/auth/forgot-password', [PrimaController::class, 'forgotPassword'])->middleware('throttle:password-reset-request');
+    Route::post('/auth/reset-password', [PrimaController::class, 'resetPassword'])->middleware('throttle:password-reset-confirm');
     Route::get('/verify/{value}', [PrimaController::class, 'verify'])->middleware('throttle:60,1');
     Route::post('/scheduler/run/{secret}', [AdminController::class, 'runScheduler'])->middleware('throttle:3,1');
 
@@ -16,7 +18,10 @@ Route::prefix('v1')->group(function () {
         Route::post('/auth/logout', [PrimaController::class, 'logout']);
         Route::get('/auth/me', [PrimaController::class, 'me']);
         Route::get('/dashboard', [PrimaController::class, 'dashboard']);
+        Route::get('/my-ekim-notifications', [PrimaController::class, 'ekimNotifications']);
+        Route::post('/my-ekim-notifications/read', [PrimaController::class, 'readEkimNotifications']);
         Route::get('/vehicles', [PrimaController::class, 'vehicles']);
+        Route::get('/transporters', [PrimaController::class, 'transporters']);
         Route::get('/checklists/stats', [PrimaController::class, 'checklistStats']);
         Route::get('/checklists/template', [PrimaController::class, 'template']);
         Route::get('/checklists', [PrimaController::class, 'checklists']);
@@ -32,6 +37,7 @@ Route::prefix('v1')->group(function () {
         Route::post('/checklists/workflow', [PrimaController::class, 'workflow']);
 
         Route::get('/users', [AdminController::class, 'users']);
+        Route::post('/users', [AdminController::class, 'createUser']);
         Route::put('/users/{id}', [AdminController::class, 'updateUser']);
         Route::delete('/users/{id}', [AdminController::class, 'deleteUser']);
         Route::patch('/users/{id}/status', [AdminController::class, 'toggleUser']);

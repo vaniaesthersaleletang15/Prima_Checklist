@@ -3,7 +3,8 @@ const TOKEN_KEY = "prima_api_token";
 
 export function assetUrl(file) {
   const assets = {
-    "foto/bgpertamina.png": "/images/bg-pertamina.png",
+    "foto/bgpertamina.png": "/images/it-bitung-profil.jpeg",
+    "foto/logo-prima.png": "/images/logo-prima-transparent.png",
     "foto/Logo HSSE 2022.png": "/images/logo-hsse.png",
     "foto/PT_Pertamina_Patra_Niaga.png": "/images/pertamina-patra-niaga.png",
   };
@@ -68,7 +69,12 @@ export const api = {
     }
   },
   register: (data) => json("/auth/register", data),
+  forgotPassword: (email) => json("/auth/forgot-password", { email }),
+  resetPasswordSelf: (data) => json("/auth/reset-password", data),
   dashboard: () => request("/dashboard"),
+  ekimNotifications: () => request("/my-ekim-notifications"),
+  readEkimNotifications: (id = null) =>
+    json("/my-ekim-notifications/read", id ? { id } : {}),
   vehicles: () => request("/vehicles"),
   checklists: (params = {}) =>
     request(`/checklists?${new URLSearchParams(params)}`),
@@ -86,6 +92,7 @@ export const api = {
   workflow: (data) => json("/checklists/workflow", data),
   saveSignature: (data) => json("/checklists/signature", data),
   users: () => request("/users"),
+  createUser: (data) => json("/users", data),
   updateUser: (data) => json(`/users/${data.user_id}`, data, "PUT"),
   deleteUser: (id) => request(`/users/${id}`, { method: "DELETE" }),
   toggleUser: (data) => json(`/users/${data.user_id}/status`, data, "PATCH"),
@@ -121,6 +128,7 @@ export const api = {
     request("/notifications/regenerate-cron", { method: "POST" }),
   myVehicles: () => request("/my-vehicles"),
   registerMyVehicle: (data) => json("/my-vehicles", data),
+  transporters: () => request("/transporters"),
   userVehicles: () => request("/user-vehicles"),
   registerUserVehicle: (data) => json("/user-vehicles", data),
   saveVehicle: (data) => json("/vehicles/manage", data),

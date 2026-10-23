@@ -57,6 +57,10 @@ services:
       PRIMA_ADMIN_USERNAME: ${PRIMA_ADMIN_USERNAME:-admin}
       PRIMA_ADMIN_PASSWORD: ${PRIMA_ADMIN_PASSWORD:-Admin123!}
       PRIMA_ADMIN_EMAIL: ${PRIMA_ADMIN_EMAIL:-admin@prima.local}
+      PRIMA_MANAGER_USERNAME: ${PRIMA_MANAGER_USERNAME:-manager}
+      PRIMA_MANAGER_NAME: ${PRIMA_MANAGER_NAME:-Integrated Terminal Manager}
+      PRIMA_MANAGER_PASSWORD: ${PRIMA_MANAGER_PASSWORD:-}
+      PRIMA_MANAGER_EMAIL: ${PRIMA_MANAGER_EMAIL:-}
       PRIMA_RUN_MIGRATIONS: "true"
     volumes:
       - laravel_storage:/app/storage
@@ -145,6 +149,22 @@ services:
         condition: service_healthy
     networks: [prima]
 
+  # SMTP catcher khusus pengembangan/pengujian lokal. Aktifkan dengan:
+  # docker compose --profile mail up -d mailpit
+  mailpit:
+    image: axllent/mailpit:v1.27
+    profiles: [mail]
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${MAILPIT_PORT:-8025}:8025"
+    environment:
+      MP_DATABASE: /data/mailpit.db
+      MP_MAX_MESSAGES: 5000
+      TZ: Asia/Makassar
+    volumes:
+      - mailpit_data:/data
+    networks: [prima]
+
   legacy-mysql:
     image: mariadb:11.4
     profiles: [migration]
@@ -165,6 +185,7 @@ volumes:
   postgres_data:
   laravel_storage:
   legacy_mysql_data:
+  mailpit_data:
 
 networks:
   prima:

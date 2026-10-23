@@ -11,15 +11,21 @@ use DOMXPath;
 use Illuminate\Http\JsonResponse;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Config;
 use Illuminate\Support\Facades\Hash;
+use Illuminate\Support\Facades\Log;
+use Illuminate\Support\Facades\Mail;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Str;
 use Illuminate\Validation\Rule;
+use Illuminate\Validation\Rules\Password;
 use Symfony\Component\HttpKernel\Exception\HttpException;
 
 class PrimaController extends Controller
 {
     private const ROLES = ['admin', 'user', 'pengurus', 'hsse', 'manager_hsse'];
+
+    private const INTERNAL_ROLES = ['admin', 'user', 'hsse', 'manager_hsse'];
 
     private const STATES = ['draft', 'pending_hsse', 'signed_hsse', 'approved', 'rejected'];
 
@@ -60,22 +66,24 @@ class PrimaController extends Controller
     public function login(Request $r): JsonResponse
     {
         $turnstile = app(TurnstileVerifier::class);
+        $r->merge(['email' => strtolower(trim((string) $r->email))]);
         $v = Validator::make($r->all(), [
-            'username' => 'required|string|max:50',
+            'email' => 'required|email|max:100',
             'password' => 'required|string',
+            'portal' => ['required', Rule::in(['internal', 'transportir'])],
             'captcha_token' => $turnstile->enabled() ? 'required|string|max:2048' : 'nullable|string|max:2048',
         ]);
         if ($v->fails()) {
             $message = $turnstile->enabled()
-                ? 'Username, password, dan verifikasi CAPTCHA wajib diisi.'
-                : 'Username dan password wajib diisi.';
+                ? 'Email, password, dan verifikasi CAPTCHA wajib diisi.'
+                : 'Email dan password wajib diisi.';
 
             return $this->fail($message, 422, $v->errors());
         }
         if (! $turnstile->verify($r->string('captcha_token')->toString(), $r->ip())) {
             return $this->fail('Verifikasi CAPTCHA gagal atau kedaluwarsa. Silakan coba kembali.', 422);
         }
-        $u = User::where('username', $r->string('username')->trim())->first();
+        $u = User::whereRaw('LOWER(email) = ?', [strtolower($r->string('email')->trim()->toString())])->first();
         if (! $u || ! Hash::check((string) $r->password, $u->password)) {
             if ($u) {
                 $u->login_attempts++;
@@ -84,7 +92,7 @@ class PrimaController extends Controller
                 } $u->save();
             }
 
-            return $this->fail('Username atau password salah.', 401);
+            return $this->fail('Email atau password salah.', 401);
         }
         if ($u->locked_until?->isFuture()) {
             return $this->fail('Akun terkunci sementara.', 423);
@@ -92,13 +100,26 @@ class PrimaController extends Controller
         if ($u->status !== 'active') {
             return $this->fail('Akun belum aktif.', 403);
         }
+        $portal = $r->string('portal')->toString();
+        $allowedRoles = $portal === 'internal' ? self::INTERNAL_ROLES : ['pengurus'];
+        if (! in_array($u->role, $allowedRoles, true)) {
+            DB::table('audit_log')->insert([
+                'action' => 'LOGIN_PORTAL_DENIED',
+                'user_name' => $u->username,
+                'ip_address' => $r->ip(),
+                'description' => "Percobaan login akun {$u->role} melalui portal {$portal}",
+                'created_at' => now(),
+            ]);
+
+            return $this->fail('Akun tidak dapat digunakan pada portal ini. Gunakan portal sesuai jenis akun.', 403);
+        }
         if ($u->role !== 'admin' && $this->setting('maintenance_mode', '0') === '1') {
             return $this->fail($this->setting('maintenance_message', 'Sistem sedang dalam pemeliharaan.'), 503);
         }
         $u->forceFill(['login_attempts' => 0, 'locked_until' => null, 'last_login' => now()])->save();
         $minutes = max(15, min(480, (int) $this->setting('session_timeout_minutes', 60)));
-        $token = $u->createToken('prima-react', ['*'], now()->addMinutes($minutes))->plainTextToken;
-        DB::table('audit_log')->insert(['action' => 'LOGIN', 'user_name' => $u->username, 'ip_address' => $r->ip(), 'description' => 'Login berhasil', 'created_at' => now()]);
+        $token = $u->createToken("prima-{$portal}", ["portal:{$portal}"], now()->addMinutes($minutes))->plainTextToken;
+        DB::table('audit_log')->insert(['action' => 'LOGIN', 'user_name' => $u->username, 'ip_address' => $r->ip(), 'description' => "Login berhasil melalui portal {$portal}", 'created_at' => now()]);
 
         return $this->ok('Login berhasil.', ['user' => $this->userData($u), 'token' => $token]);
     }
@@ -119,21 +140,145 @@ class PrimaController extends Controller
         ]);
     }
 
-    public function register(Request $r): JsonResponse
+    public function forgotPassword(Request $r): JsonResponse
     {
+        $r->merge(['email' => strtolower(trim((string) $r->email))]);
+        $v = Validator::make($r->all(), ['email' => ['required', 'email', 'max:100']]);
+        if ($v->fails()) {
+            return $this->fail('Masukkan alamat email yang valid.', 422, $v->errors());
+        }
+
+        $genericMessage = 'Jika email terdaftar sebagai akun transportir, tautan reset password akan dikirim.';
+        $user = User::whereRaw('LOWER(email) = ?', [$r->email])
+            ->where('role', 'pengurus')
+            ->where('status', 'active')
+            ->first();
+        if (! $user) {
+            return $this->ok($genericMessage);
+        }
+
+        $token = Str::random(64);
+        DB::table('password_reset_tokens')->updateOrInsert(
+            ['email' => $user->email],
+            ['token' => Hash::make($token), 'created_at' => now()]
+        );
+
+        try {
+            if (! $this->configureSystemMailer()) {
+                throw new \RuntimeException('Konfigurasi SMTP belum lengkap.');
+            }
+            $resetUrl = rtrim((string) config('app.frontend_url'), '/').'/#/transportir/reset-password?'.http_build_query([
+                'email' => $user->email,
+                'token' => $token,
+            ]);
+            Mail::raw(
+                "Kami menerima permintaan reset password akun transportir PRIMA.\n\nBuka tautan berikut dalam 15 menit:\n{$resetUrl}\n\nTautan hanya dapat digunakan satu kali. Jika Anda tidak meminta reset password, abaikan email ini.",
+                fn ($message) => $message->to($user->email)->subject('Reset Password Akun Transportir PRIMA')
+            );
+            DB::table('audit_log')->insert(['action' => 'PASSWORD_RESET_REQUEST', 'user_name' => $user->username, 'ip_address' => $r->ip(), 'description' => 'Tautan reset password transportir dikirim', 'created_at' => now()]);
+        } catch (\Throwable $e) {
+            DB::table('password_reset_tokens')->where('email', $user->email)->delete();
+            Log::error('Pengiriman reset password PRIMA gagal.', ['user_id' => $user->id, 'error' => $e->getMessage()]);
+        }
+
+        return $this->ok($genericMessage);
+    }
+
+    public function resetPassword(Request $r): JsonResponse
+    {
+        $r->merge(['email' => strtolower(trim((string) $r->email))]);
         $v = Validator::make($r->all(), [
-            'username' => ['required', 'regex:/^[A-Za-z0-9_]+$/', 'max:50'], 'email' => 'required|email|max:100', 'password' => 'required|min:8|max:100',
-            'full_name' => 'required|max:100', 'phone' => 'required|max:20', 'reason' => 'required|max:1000', 'requested_role' => ['nullable', Rule::in(['user', 'pengurus', 'manager_hsse'])],
+            'email' => ['required', 'email', 'max:100'],
+            'token' => ['required', 'string', 'max:255'],
+            'password' => ['required', 'string', 'confirmed', 'max:100', Password::min(8)->mixedCase()->numbers()->symbols()],
+        ], [
+            'password.confirmed' => 'Konfirmasi password tidak sama.',
+            'password.min' => 'Password minimal 8 karakter.',
+            'password.mixed' => 'Password harus mengandung huruf besar dan huruf kecil.',
+            'password.numbers' => 'Password harus mengandung minimal satu angka.',
+            'password.symbols' => 'Password harus mengandung minimal satu simbol.',
         ]);
         if ($v->fails()) {
             return $this->fail($v->errors()->first(), 422, $v->errors());
         }
-        $exists = User::where('username', $r->username)->orWhere('email', $r->email)->exists() || DB::table('user_registrations')->where(fn ($q) => $q->where('username', $r->username)->orWhere('email', $r->email))->whereIn('status', ['pending', 'approved'])->exists();
-        if ($exists) {
-            return $this->fail('Username atau email sudah terdaftar.', 409);
+
+        $user = User::whereRaw('LOWER(email) = ?', [$r->email])
+            ->where('role', 'pengurus')
+            ->where('status', 'active')
+            ->first();
+        $reset = DB::table('password_reset_tokens')->where('email', $r->email)->first();
+        $valid = $user
+            && $reset
+            && $reset->created_at
+            && Carbon::parse($reset->created_at)->gte(now()->subMinutes(15))
+            && Hash::check((string) $r->token, $reset->token);
+        if (! $valid) {
+            return $this->fail('Tautan reset password tidak valid atau sudah kedaluwarsa.', 422);
         }
-        DB::table('user_registrations')->where('username', $r->username)->orWhere('email', $r->email)->delete();
-        DB::table('user_registrations')->insert(['username' => $r->username, 'email' => $r->email, 'password' => Hash::make($r->password), 'full_name' => $r->full_name, 'phone' => $r->phone, 'reason' => $r->reason, 'requested_role' => $r->requested_role ?: 'user', 'status' => 'pending', 'created_at' => now(), 'updated_at' => now()]);
+
+        DB::transaction(function () use ($user, $r): void {
+            $user->forceFill([
+                'password' => $r->password,
+                'login_attempts' => 0,
+                'locked_until' => null,
+            ])->save();
+            $user->tokens()->delete();
+            DB::table('sessions')->where('user_id', $user->id)->delete();
+            DB::table('password_reset_tokens')->where('email', $user->email)->delete();
+            DB::table('audit_log')->insert(['action' => 'PASSWORD_RESET_SELF', 'user_name' => $user->username, 'ip_address' => $r->ip(), 'description' => 'Password transportir direset melalui tautan email', 'created_at' => now()]);
+        });
+
+        return $this->ok('Password berhasil diubah. Silakan masuk menggunakan password baru.');
+    }
+
+    private function configureSystemMailer(): bool
+    {
+        $settings = DB::table('system_settings')->pluck('setting_value', 'setting_key');
+        foreach (['smtp_host', 'smtp_port', 'smtp_from_email'] as $key) {
+            if (blank($settings[$key] ?? null)) {
+                return false;
+            }
+        }
+        $username = trim((string) ($settings['smtp_username'] ?? ''));
+        if ($username !== '' && blank($settings['smtp_password'] ?? null)) {
+            return false;
+        }
+        $encryption = $settings['smtp_encryption'] ?? 'tls';
+        $password = filled($settings['smtp_password'] ?? null) ? decrypt($settings['smtp_password']) : null;
+        Config::set('mail.mailers.smtp', ['transport' => 'smtp', 'scheme' => $encryption === 'ssl' ? 'smtps' : 'smtp', 'host' => $settings['smtp_host'], 'port' => (int) $settings['smtp_port'], 'auto_tls' => $encryption !== 'none', 'username' => $username !== '' ? $username : null, 'password' => $password, 'timeout' => 30]);
+        Config::set('mail.default', 'smtp');
+        Config::set('mail.from', ['address' => strtolower(trim((string) $settings['smtp_from_email'])), 'name' => $settings['smtp_from_name'] ?? 'PRIMA']);
+        Mail::purge('smtp');
+
+        return true;
+    }
+
+    public function register(Request $r): JsonResponse
+    {
+        $r->merge(['email' => strtolower(trim((string) $r->email))]);
+        $v = Validator::make($r->all(), [
+            'portal' => ['required', Rule::in(['transportir'])],
+            'email' => 'required|email|max:100',
+            'password' => ['required', 'string', 'max:100', Password::min(8)->mixedCase()->numbers()->symbols()],
+            'full_name' => 'required|max:100', 'phone' => 'required|max:20', 'reason' => 'required|max:1000', 'requested_role' => ['required', Rule::in(['pengurus'])],
+        ], [
+            'password.min' => 'Password minimal 8 karakter.',
+            'password.mixed' => 'Password harus mengandung huruf besar dan huruf kecil.',
+            'password.numbers' => 'Password harus mengandung minimal satu angka.',
+            'password.symbols' => 'Password harus mengandung minimal satu simbol.',
+        ]);
+        if ($v->fails()) {
+            return $this->fail($v->errors()->first(), 422, $v->errors());
+        }
+        $requestedRole = $r->string('requested_role')->toString();
+        $email = strtolower(trim((string) $r->email));
+        $username = 'user_'.substr(hash('sha256', $email), 0, 32);
+        $exists = User::whereRaw('LOWER(email) = ?', [$email])->exists() || DB::table('user_registrations')->whereRaw('LOWER(email) = ?', [$email])->whereIn('status', ['pending', 'approved'])->exists();
+        if ($exists) {
+            return $this->fail('Email sudah terdaftar.', 409);
+        }
+        DB::table('user_registrations')->whereRaw('LOWER(email) = ?', [$email])->delete();
+        DB::table('user_registrations')->insert(['username' => $username, 'email' => $email, 'password' => Hash::make($r->password), 'full_name' => $r->full_name, 'phone' => $r->phone, 'reason' => $r->reason, 'requested_role' => $requestedRole, 'status' => 'pending', 'created_at' => now(), 'updated_at' => now()]);
 
         return $this->ok('Pendaftaran berhasil dikirim dan menunggu persetujuan administrator.');
     }
@@ -152,7 +297,7 @@ class PrimaController extends Controller
 
     private function userData(User $u): array
     {
-        return ['id' => $u->id, 'username' => $u->username, 'full_name' => $u->full_name, 'email' => $u->email, 'phone' => $u->phone, 'role' => $u->role, 'status' => $u->status];
+        return ['id' => $u->id, 'full_name' => $u->full_name, 'email' => $u->email, 'phone' => $u->phone, 'role' => $u->role, 'status' => $u->status];
     }
 
     public function dashboard(Request $r): JsonResponse
@@ -160,9 +305,12 @@ class PrimaController extends Controller
         $u = $r->user();
         $start = now()->startOfMonth();
         $end = now()->endOfMonth();
-        $counts = ['checklists' => DB::table('formulir_checklist')->count(), 'spbu' => DB::table('formulir_checklist')->whereRaw('UPPER(jenis_kendaraan)=?', ['SPBU'])->count(), 'industri' => DB::table('formulir_checklist')->whereRaw('UPPER(jenis_kendaraan)=?', ['INDUSTRI'])->count(), 'bulan_ini' => DB::table('formulir_checklist')->whereBetween('tanggal_pemeriksaan', [$start, $end])->count()];
-        foreach (self::STATES as $s) {
-            $counts[$s] = DB::table('formulir_checklist')->where('status_approval', $s)->count();
+        $counts = [];
+        if ($u->role !== 'pengurus') {
+            $counts = ['checklists' => DB::table('formulir_checklist')->count(), 'spbu' => DB::table('formulir_checklist')->whereRaw('UPPER(jenis_kendaraan)=?', ['SPBU'])->count(), 'industri' => DB::table('formulir_checklist')->whereRaw('UPPER(jenis_kendaraan)=?', ['INDUSTRI'])->count(), 'bulan_ini' => DB::table('formulir_checklist')->whereBetween('tanggal_pemeriksaan', [$start, $end])->count()];
+            foreach (self::STATES as $s) {
+                $counts[$s] = DB::table('formulir_checklist')->where('status_approval', $s)->count();
+            }
         }
         if ($u->role === 'admin') {
             $counts += ['users' => User::where('username', '<>', 'admin')->count(), 'active_users' => User::where('username', '<>', 'admin')->where('status', 'active')->count(), 'pending_registrations' => DB::table('user_registrations')->where('status', 'pending')->count(), 'vehicles' => DB::table('kendaraan')->count(), 'pending_documents' => DB::table('dokumen_kendaraan')->where('status', 'PENDING')->count(), 'vehicle_alerts' => count($this->vehicleAlerts(30))];
@@ -170,7 +318,7 @@ class PrimaController extends Controller
         if ($u->role === 'pengurus') {
             $rows = $this->managedVehicles($u->id);
             $counts['ekim_notifications'] = DB::table('ekim_notifikasi')->where('user_id', $u->id)->orderByDesc('created_at')->limit(10)->get();
-            DB::table('ekim_notifikasi')->where('user_id', $u->id)->update(['is_read' => true]);
+            $counts['unread_ekim_notifications'] = DB::table('ekim_notifikasi')->where('user_id', $u->id)->where('is_read', false)->count();
             $counts += ['my_vehicles' => count($rows), 'my_pending_documents' => collect($rows)->sum('pending_dokumen'), 'my_approved_documents' => collect($rows)->sum('disetujui_dokumen'), 'my_rejected_documents' => collect($rows)->sum('ditolak_dokumen')];
         }
         $counts['profile'] = $this->userData($u);
@@ -178,8 +326,36 @@ class PrimaController extends Controller
         return $this->ok('OK', $counts);
     }
 
+    public function ekimNotifications(Request $r): JsonResponse
+    {
+        $this->requireRole($r, ['pengurus']);
+        $notifications = DB::table('ekim_notifikasi')
+            ->where('user_id', $r->user()->id)
+            ->orderByDesc('created_at')
+            ->limit(100)
+            ->get();
+
+        return $this->ok('OK', [
+            'notifications' => $notifications,
+            'unread_count' => $notifications->where('is_read', false)->count(),
+        ]);
+    }
+
+    public function readEkimNotifications(Request $r): JsonResponse
+    {
+        $this->requireRole($r, ['pengurus']);
+        $query = DB::table('ekim_notifikasi')->where('user_id', $r->user()->id);
+        if ($r->filled('id')) {
+            $query->where('id', $r->integer('id'));
+        }
+        $updated = $query->where('is_read', false)->update(['is_read' => true]);
+
+        return $this->ok('Notifikasi telah ditandai dibaca.', ['updated' => $updated]);
+    }
+
     public function checklistStats(Request $r): JsonResponse
     {
+        $this->requireRole($r, ['admin', 'user', 'hsse', 'manager_hsse']);
         $start = now()->startOfMonth();
         $end = now()->endOfMonth();
 
@@ -188,16 +364,47 @@ class PrimaController extends Controller
 
     public function vehicles(Request $r): JsonResponse
     {
-        $q = DB::table('kendaraan as k')->select('k.*')->selectSub(fn ($s) => $s->from('pengurus_kendaraan as pk')->join('users as u', 'u.id', '=', 'pk.user_id')->whereColumn('pk.nomor_polisi', 'k.nomor_polisi')->latest('pk.created_at')->select('u.username')->limit(1), 'username_transportir')->latest('k.created_at');
+        $q = DB::table('kendaraan as k')->select('k.*')->selectSub(fn ($s) => $s->from('pengurus_kendaraan as pk')->whereColumn('pk.nomor_polisi', 'k.nomor_polisi')->latest('pk.created_at')->select('pk.user_id')->limit(1), 'user_id_transportir')->latest('k.created_at');
         if ($r->user()->role === 'pengurus') {
             $q->whereExists(fn ($s) => $s->from('pengurus_kendaraan as owner')->whereColumn('owner.nomor_polisi', 'k.nomor_polisi')->where('owner.user_id', $r->user()->id));
         }
 
-        return $this->ok('OK', $q->get());
+        $vehicles = $q->get();
+        $approvedDocuments = DB::table('dokumen_kendaraan')
+            ->whereIn('nomor_polisi', $vehicles->pluck('nomor_polisi'))
+            ->where('status', 'DISETUJUI')
+            ->whereIn('jenis_dokumen', ['STNK', 'PAJAK', 'SIM', 'SURAT_KEUR', 'SURAT_TERA'])
+            ->whereNotNull('tanggal_berlaku')
+            ->orderByDesc('tanggal_berlaku')
+            ->orderByDesc('reviewed_at')
+            ->get(['nomor_polisi', 'jenis_dokumen', 'tanggal_berlaku']);
+        $expiryByVehicle = [];
+        foreach ($approvedDocuments as $document) {
+            if (! isset($expiryByVehicle[$document->nomor_polisi][$document->jenis_dokumen])) {
+                $expiryByVehicle[$document->nomor_polisi][$document->jenis_dokumen] = (string) $document->tanggal_berlaku;
+            }
+        }
+        $vehicles->each(function ($vehicle) use ($expiryByVehicle): void {
+            $vehicle->approved_document_expiries = $expiryByVehicle[$vehicle->nomor_polisi] ?? [];
+        });
+
+        return $this->ok('OK', $vehicles);
+    }
+
+    public function transporters(Request $r): JsonResponse
+    {
+        $this->requireRole($r, ['admin', 'user', 'hsse']);
+
+        return $this->ok('OK', User::query()
+            ->where('role', 'pengurus')
+            ->where('status', 'active')
+            ->orderBy('full_name')
+            ->get(['id', 'full_name', 'email', 'department', 'position']));
     }
 
     public function template(Request $r): JsonResponse
     {
+        $this->requireRole($r, ['admin', 'user', 'hsse', 'manager_hsse']);
         $jenis = strtoupper($r->query('jenis', 'SPBU')) === 'INDUSTRI' ? 'INDUSTRI' : 'SPBU';
         $file = resource_path('checklists/'.strtolower($jenis).'.html');
         $dom = new DOMDocument;
@@ -220,6 +427,7 @@ class PrimaController extends Controller
 
     public function checklists(Request $r): JsonResponse
     {
+        $this->requireRole($r, ['admin', 'user', 'hsse', 'manager_hsse']);
         $limit = max(1, min(100, (int) $r->query('limit', 50)));
         $q = DB::table('formulir_checklist as f');
         if ($s = trim($r->query('search', ''))) {
@@ -235,6 +443,14 @@ class PrimaController extends Controller
         } if (in_array($r->query('status'), self::STATES, true)) {
             $q->where('f.status_approval', $r->query('status'));
         }
+        if ($r->boolean('signedByMe')) {
+            if ($r->user()->role !== 'manager_hsse') {
+                return $this->fail('Riwayat persetujuan hanya dapat diakses oleh Manager HSSE.', 403);
+            }
+            $q->where('f.status_approval', 'approved')
+                ->where('f.ttd_manajer_user_id', $r->user()->id)
+                ->whereNotNull('f.ttd_manajer_timestamp');
+        }
         $p = $q->select('f.*')->selectSub(fn ($s) => $s->from('checklist_items')->whereColumn('formulir_id', 'f.id')->selectRaw('COUNT(*)'), 'total_items')->selectSub(fn ($s) => $s->from('checklist_items')->whereColumn('formulir_id', 'f.id')->where('is_baik', true)->selectRaw('COUNT(*)'), 'total_baik')->selectSub(fn ($s) => $s->from('checklist_items')->whereColumn('formulir_id', 'f.id')->where('is_tidak', true)->selectRaw('COUNT(*)'), 'total_tidak')->orderByDesc('f.tanggal_pemeriksaan')->orderByDesc('f.created_at')->paginate($limit);
         $data = collect($p->items())->map(function ($x) {
             $x = (array) $x;
@@ -249,6 +465,7 @@ class PrimaController extends Controller
 
     public function checklist(Request $r, int $id): JsonResponse
     {
+        $this->requireRole($r, ['admin', 'user', 'hsse', 'manager_hsse']);
         $f = DB::table('formulir_checklist')->where('id', $id)->first();
         if (! $f) {
             return $this->fail('Data tidak ditemukan.', 404);
@@ -265,6 +482,7 @@ class PrimaController extends Controller
 
     public function saveChecklist(Request $r): JsonResponse
     {
+        $this->requireRole($r, ['admin', 'user', 'hsse', 'manager_hsse']);
         if ($r->user()->role === 'manager_hsse') {
             return $this->fail('Manager tidak dapat mengubah formulir.', 403);
         }
@@ -324,6 +542,7 @@ class PrimaController extends Controller
 
     public function deleteChecklist(Request $r, int $id): JsonResponse
     {
+        $this->requireRole($r, ['admin', 'user', 'hsse', 'manager_hsse']);
         if ($r->user()->role === 'manager_hsse') {
             return $this->fail('Akses ditolak.', 403);
         }$f = DB::table('formulir_checklist')->where('id', $id)->first();
@@ -398,6 +617,7 @@ class PrimaController extends Controller
                 return $this->fail('Integritas dokumen gagal. Isi berubah setelah tanda tangan HSSE.', 409);
             }$final = $this->canonical($f->id, 'sha512');
             DB::table('formulir_checklist')->where('id', $f->id)->update(['status_approval' => 'approved', 'ttd_manajer_user_id' => $u->id, 'ttd_manajer_nama' => $name, 'ttd_manajer_timestamp' => now(), 'ttd_manajer_signature' => $sig, 'ttd_manajer_hash' => $hash, 'ttd_manajer_gambar' => $r->canvas_image, 'verification_hash_sha512' => $final, 'verification_signature' => $this->sign($final), 'verification_created_at' => now(), 'verification_uuid' => $uuid, 'verification_url' => $url]);
+            DB::table('kendaraan')->where('nomor_polisi', $f->nomor_polisi)->update(['ekim_valid_until' => $f->ekim_valid_until, 'tanggal_pemeriksaan_terakhir' => $f->tanggal_pemeriksaan, 'updated_at' => now()]);
             $action = 'SIGN_MANAJER';
             $status = 'approved';
             $message = "Tanda tangan Manajer berhasil disimpan oleh $name. Formulir telah DISETUJUI.";
@@ -411,22 +631,40 @@ class PrimaController extends Controller
 
     public function workflow(Request $r): JsonResponse
     {
-        $this->requireRole($r, ['admin', 'hsse', 'manager_hsse']);
+        $this->requireRole($r, ['admin', 'user', 'hsse', 'manager_hsse']);
         $f = DB::table('formulir_checklist')->where('id', $r->integer('formulir_id'))->first();
         if (! $f) {
             return $this->fail('Formulir tidak ditemukan.', 404);
         }$action = $r->input('action');
         if ($action === 'submit') {
-            if (! in_array($r->user()->role, ['admin', 'hsse'], true) || $f->status_approval !== 'draft') {
+            if (! in_array($r->user()->role, ['admin', 'user', 'hsse'], true) || $f->status_approval !== 'draft') {
                 return $this->fail('Aksi tidak diizinkan.', 403);
-            }DB::table('formulir_checklist')->where('id', $f->id)->update(['status_approval' => 'pending_hsse']);
-            $state = 'pending_hsse';
+            }
+            $failureReason = $this->checklistFailureReason($f->id);
+            if ($failureReason !== '') {
+                DB::table('formulir_checklist')->where('id', $f->id)->update(['status_approval' => 'rejected']);
+                $state = 'rejected';
+                $this->notifyOwners($f->nomor_polisi, $f->id, 'rejected', "E-KIM kendaraan {$f->nomor_polisi} tidak dapat diterbitkan. Alasan: $failureReason");
+            } else {
+                DB::table('formulir_checklist')->where('id', $f->id)->update(['status_approval' => 'pending_hsse']);
+                $state = 'pending_hsse';
+            }
         } elseif ($action === 'reject') {
+            $canReject = $r->user()->role === 'admin'
+                || ($r->user()->role === 'hsse' && $f->status_approval === 'pending_hsse')
+                || ($r->user()->role === 'manager_hsse' && $f->status_approval === 'signed_hsse');
+            if (! $canReject) {
+                return $this->fail('Aksi penolakan tidak diizinkan.', 403);
+            }
             if (! in_array($f->status_approval, ['pending_hsse', 'signed_hsse'], true)) {
                 return $this->fail('Status tidak dapat ditolak.', 409);
             }DB::table('formulir_checklist')->where('id', $f->id)->update(['status_approval' => 'rejected']);
             $state = 'rejected';
-            $this->notifyOwners($f->nomor_polisi, $f->id, 'rejected', "EKIM {$f->nomor_polisi} ditolak: ".$r->input('reason', ''));
+            $failureReason = $this->checklistFailureReason($f->id, $r->input('reason'));
+            if ($failureReason === '') {
+                $failureReason = 'Checklist tidak memenuhi persyaratan penerbitan E-KIM.';
+            }
+            $this->notifyOwners($f->nomor_polisi, $f->id, 'rejected', "E-KIM kendaraan {$f->nomor_polisi} tidak dapat diterbitkan. Alasan: $failureReason");
         } elseif ($action === 'reset_draft' && $r->user()->role === 'admin') {
             if ($f->status_approval === 'approved') {
                 return $this->fail('Formulir approved tidak dapat di-reset.', 409);
@@ -436,7 +674,11 @@ class PrimaController extends Controller
             return $this->fail('Aksi tidak dikenali atau tidak diizinkan.', 403);
         }$this->audit($r, 'UPDATE', "Status checklist menjadi $state", $f->id);
 
-        return $this->ok('Status checklist berhasil diperbarui.', ['new_status' => $state]);
+        $message = $state === 'rejected'
+            ? 'Checklist ditolak dan alasan kegagalan E-KIM telah dikirim kepada transportir.'
+            : 'Status checklist berhasil diperbarui.';
+
+        return $this->ok($message, ['new_status' => $state, 'reason' => $failureReason ?? null]);
     }
 
     public function verify(Request $r, string $value): JsonResponse
@@ -463,8 +705,36 @@ class PrimaController extends Controller
     private function notifyOwners(string $plate, int $formId, string $status, string $message): void
     {
         foreach (DB::table('pengurus_kendaraan')->where('nomor_polisi', $plate)->pluck('user_id') as $uid) {
-            DB::table('ekim_notifikasi')->insert(['user_id' => $uid, 'formulir_id' => $formId, 'nomor_polisi' => $plate, 'status' => $status, 'pesan' => $message, 'is_read' => false, 'created_at' => now()]);
+            DB::table('ekim_notifikasi')->updateOrInsert(
+                ['user_id' => $uid, 'formulir_id' => $formId, 'status' => $status],
+                ['nomor_polisi' => $plate, 'pesan' => $message, 'is_read' => false, 'created_at' => now()]
+            );
         }
+    }
+
+    private function checklistFailureReason(int $formId, ?string $manualReason = null): string
+    {
+        $badItems = DB::table('checklist_items')
+            ->where('formulir_id', $formId)
+            ->where('is_tidak', true)
+            ->orderBy('item_number')
+            ->get(['item_name', 'keterangan'])
+            ->map(function ($item): string {
+                $note = trim((string) $item->keterangan);
+
+                return $note !== '' ? "{$item->item_name} ($note)" : (string) $item->item_name;
+            })
+            ->all();
+        $reasons = [];
+        if ($badItems !== []) {
+            $reasons[] = 'Item Tidak Baik: '.implode('; ', $badItems);
+        }
+        $manualReason = trim((string) $manualReason);
+        if ($manualReason !== '') {
+            $reasons[] = 'Catatan SPV HSSE: '.$manualReason;
+        }
+
+        return implode('. ', $reasons);
     }
 
     private function managedVehicles(int $uid): array

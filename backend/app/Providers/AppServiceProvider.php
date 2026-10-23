@@ -22,6 +22,20 @@ class AppServiceProvider extends ServiceProvider
      */
     public function boot(): void
     {
-        RateLimiter::for('login', fn (Request $request) => Limit::perMinute(5)->by(strtolower((string) $request->input('username')).'|'.$request->ip()));
+        RateLimiter::for('login', fn (Request $request) => Limit::perMinute(5)->by(strtolower((string) $request->input('email')).'|'.$request->ip()));
+        RateLimiter::for('password-reset-request', fn (Request $request) => Limit::perMinute(5)
+            ->by(strtolower(trim((string) $request->input('email'))).'|'.$request->ip())
+            ->response(fn (Request $request, array $headers) => response()->json([
+                'success' => false,
+                'message' => 'Terlalu banyak permintaan reset. Silakan tunggu satu menit lalu coba kembali.',
+                'data' => null,
+            ], 429, $headers)));
+        RateLimiter::for('password-reset-confirm', fn (Request $request) => Limit::perMinute(10)
+            ->by(strtolower(trim((string) $request->input('email'))).'|'.$request->ip())
+            ->response(fn (Request $request, array $headers) => response()->json([
+                'success' => false,
+                'message' => 'Terlalu banyak percobaan. Silakan tunggu satu menit lalu coba kembali.',
+                'data' => null,
+            ], 429, $headers)));
     }
 }

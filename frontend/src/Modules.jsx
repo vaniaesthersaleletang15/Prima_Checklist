@@ -1,14 +1,16 @@
 import { useEffect, useRef, useState } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import QRCode from "qrcode";
 import {
   AlertTriangle,
+  Bell,
   CalendarDays,
   Check,
   ChevronLeft,
   ChevronRight,
   Edit3,
   Eye,
+  EyeOff,
   FileText,
   KeyRound,
   PenLine,
@@ -29,7 +31,7 @@ const roles = {
   pengurus: "Pengurus",
   hsse: "HSSE",
   manager_hsse: "Manager HSSE",
-  admin: "Administrator",
+  admin: "SPV HSSE / Administrator Sistem",
 };
 const labels = {
   draft: "Draft",
@@ -44,6 +46,13 @@ const date = (v) =>
         new Date(`${String(v).slice(0, 10)}T00:00:00`),
       )
     : "—";
+const dateTime = (v) =>
+  v
+    ? new Intl.DateTimeFormat("id-ID", {
+        dateStyle: "medium",
+        timeStyle: "short",
+      }).format(new Date(String(v).replace(" ", "T")))
+    : "—";
 const expiryDateItems = new Set([
   "stnk",
   "pajak",
@@ -57,6 +66,26 @@ const normalizeChecklistName = (itemName) =>
     .replace(/[^a-z0-9]/g, "");
 const usesExpiryDate = (itemName) =>
   expiryDateItems.has(normalizeChecklistName(itemName));
+const checklistDocumentTypes = {
+  stnk: "STNK",
+  pajak: "PAJAK",
+  simfitindustri: "SIM",
+  suratterametrologi: "SURAT_TERA",
+  suratkeurdllaajr: "SURAT_KEUR",
+};
+const applyApprovedDocumentExpiries = (checklist, vehicle) => {
+  const expiries = vehicle?.approved_document_expiries || {};
+  return checklist.map((checklistItem) => {
+    const documentType =
+      checklistDocumentTypes[normalizeChecklistName(checklistItem.nama)];
+    return documentType
+      ? {
+          ...checklistItem,
+          tanggal_expire: String(expiries[documentType] || "").slice(0, 10),
+        }
+      : checklistItem;
+  });
+};
 const status = (v) => (
   <span className={`status ${String(v).toLowerCase()}`}>
     <span />
@@ -109,24 +138,25 @@ function useLoad(fn) {
   return { ...s, load };
 }
 
-export function RegisterPage() {
+export function RegisterPage({ portal = "transportir" }) {
+  const isInternal = portal === "internal";
   const [form, setForm] = useState({
-      username: "",
       email: "",
       password: "",
       full_name: "",
       phone: "",
       reason: "",
-      requested_role: "user",
+      requested_role: isInternal ? "manager_hsse" : "pengurus",
     }),
     [note, setNote] = useState(null),
-    [busy, setBusy] = useState(false);
+    [busy, setBusy] = useState(false),
+    [showPassword, setShowPassword] = useState(false);
   const set = (k, v) => setForm({ ...form, [k]: v });
   const submit = async (e) => {
     e.preventDefault();
     setBusy(true);
     try {
-      await api.register(form);
+      await api.register({ ...form, portal });
       setNote({
         ok: true,
         text: "Pendaftaran terkirim. Silakan tunggu persetujuan administrator.",
@@ -140,11 +170,18 @@ export function RegisterPage() {
   return (
     <main className="standalone">
       <section className="standalone-card">
-        <Link to="/" className="back-link">
+        <Link
+          to={isInternal ? "/internal/login" : "/transportir/login"}
+          className="back-link"
+        >
           ← Kembali ke login
         </Link>
-        <p className="eyebrow red">Registrasi akun</p>
-        <h1>Ajukan akses PRIMA</h1>
+        <p className="eyebrow red">
+          {isInternal ? "Registrasi akun internal" : "Registrasi transportir"}
+        </p>
+        <h1>
+          {isInternal ? "Ajukan akun petugas PRIMA" : "Ajukan akses PRIMA"}
+        </h1>
         <p className="muted">
           Data akan ditinjau administrator sebelum akun dapat digunakan.
         </p>
@@ -152,7 +189,6 @@ export function RegisterPage() {
         <form className="form-grid" onSubmit={submit}>
           {[
             ["full_name", "Nama lengkap"],
-            ["username", "Username"],
             ["email", "Email"],
             ["phone", "Nomor telepon"],
           ].map(([k, l]) => (
@@ -166,25 +202,46 @@ export function RegisterPage() {
             </label>
           ))}
           <label>
-            Role yang diajukan
-            <select
-              value={form.requested_role}
-              onChange={(e) => set("requested_role", e.target.value)}
-            >
-              <option value="user">User</option>
-              <option value="pengurus">Pengurus kendaraan</option>
-              <option value="manager_hsse">Manager HSSE</option>
-            </select>
+            Jenis akun
+            {isInternal ? (
+              <input value="Manager" disabled />
+            ) : (
+              <input value="Transportir / pengurus kendaraan" disabled />
+            )}
           </label>
           <label>
             Password
-            <input
-              type="password"
-              minLength="6"
-              value={form.password}
-              onChange={(e) => set("password", e.target.value)}
-              required
-            />
+            <span className="password-input-wrap">
+              <input
+                type={showPassword ? "text" : "password"}
+                minLength="8"
+                maxLength="100"
+                aria-describedby="registration-password-requirements"
+                value={form.password}
+                onChange={(e) => set("password", e.target.value)}
+                required
+              />
+              <button
+                type="button"
+                className="password-toggle"
+                onClick={() => setShowPassword((value) => !value)}
+                aria-label={
+                  showPassword ? "Sembunyikan password" : "Tampilkan password"
+                }
+                title={
+                  showPassword ? "Sembunyikan password" : "Tampilkan password"
+                }
+              >
+                {showPassword ? <EyeOff size={19} /> : <Eye size={19} />}
+              </button>
+            </span>
+            <small
+              id="registration-password-requirements"
+              className="password-requirements"
+            >
+              Minimal 8 karakter, terdiri dari huruf besar, huruf kecil, angka,
+              dan simbol.
+            </small>
           </label>
           <label className="full">
             Alasan membutuhkan akses
@@ -194,10 +251,149 @@ export function RegisterPage() {
               required
             />
           </label>
-          <button className="button primary full" disabled={busy}>
+          <button className="button primary full" disabled={busy || sent}>
             {busy ? "Mengirim…" : "Kirim pendaftaran"}
           </button>
         </form>
+      </section>
+    </main>
+  );
+}
+
+export function ForgotPasswordPage() {
+  const [email, setEmail] = useState("");
+  const [note, setNote] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [sent, setSent] = useState(false);
+  const submit = async (event) => {
+    event.preventDefault();
+    setBusy(true);
+    try {
+      const response = await api.forgotPassword(email);
+      setNote({ ok: true, text: response.message });
+      setSent(true);
+    } catch (error) {
+      setNote({ text: error.message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <main className="standalone">
+      <section className="standalone-card">
+        <Link to="/transportir/login" className="back-link">
+          ← Kembali ke login transportir
+        </Link>
+        <p className="eyebrow red">Pemulihan akun</p>
+        <h1>Lupa password transportir</h1>
+        <p className="muted">
+          Masukkan email akun transportir. Tautan reset berlaku selama 15 menit
+          dan hanya dapat digunakan satu kali.
+        </p>
+        <Notice value={note} />
+        <form className="form-grid" onSubmit={submit}>
+          <label className="full">
+            Email akun
+            <input
+              type="email"
+              autoComplete="email"
+              value={email}
+              onChange={(event) => {
+                setEmail(event.target.value);
+                setSent(false);
+                setNote(null);
+              }}
+              required
+              autoFocus
+            />
+          </label>
+          <button className="button primary full" disabled={busy}>
+            {busy ? "Mengirim…" : "Kirim tautan reset"}
+          </button>
+        </form>
+      </section>
+    </main>
+  );
+}
+
+export function ResetPasswordPage() {
+  const location = useLocation();
+  const params = new URLSearchParams(location.search);
+  const email = params.get("email") || "";
+  const token = params.get("token") || "";
+  const [form, setForm] = useState({ password: "", password_confirmation: "" });
+  const [showPassword, setShowPassword] = useState(false);
+  const [note, setNote] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [completed, setCompleted] = useState(false);
+  const submit = async (event) => {
+    event.preventDefault();
+    setBusy(true);
+    try {
+      const response = await api.resetPasswordSelf({ email, token, ...form });
+      setNote({ ok: true, text: response.message });
+      setCompleted(true);
+      setForm({ password: "", password_confirmation: "" });
+    } catch (error) {
+      setNote({ text: error.message });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <main className="standalone">
+      <section className="standalone-card">
+        <Link to="/transportir/login" className="back-link">
+          ← Kembali ke login transportir
+        </Link>
+        <p className="eyebrow red">Pemulihan akun</p>
+        <h1>Buat password baru</h1>
+        <p className="muted">Akun: {email || "Tautan tidak lengkap"}</p>
+        <Notice value={note} />
+        {!completed && (
+          <form className="form-grid" onSubmit={submit}>
+            {["password", "password_confirmation"].map((key) => (
+              <label className="full" key={key}>
+                {key === "password" ? "Password baru" : "Konfirmasi password"}
+                <span className="password-input-wrap">
+                  <input
+                    type={showPassword ? "text" : "password"}
+                    value={form[key]}
+                    onChange={(event) =>
+                      setForm({ ...form, [key]: event.target.value })
+                    }
+                    minLength="8"
+                    maxLength="100"
+                    autoComplete="new-password"
+                    required
+                  />
+                  {key === "password" && (
+                    <button
+                      type="button"
+                      className="password-toggle"
+                      onClick={() => setShowPassword((value) => !value)}
+                      aria-label={showPassword ? "Sembunyikan password" : "Tampilkan password"}
+                    >
+                      {showPassword ? <EyeOff size={19} /> : <Eye size={19} />}
+                    </button>
+                  )}
+                </span>
+              </label>
+            ))}
+            <small className="password-requirements full">
+              Minimal 8 karakter, terdiri dari huruf besar, huruf kecil, angka,
+              dan simbol.
+            </small>
+            <button
+              className="button primary full"
+              disabled={busy || !email || !token}
+            >
+              {busy ? "Menyimpan…" : "Simpan password baru"}
+            </button>
+          </form>
+        )}
       </section>
     </main>
   );
@@ -233,6 +429,8 @@ export function ChecklistEditor({ user }) {
     [form, setForm] = useState(emptyForm(jenis.toUpperCase())),
     [vehicles, setVehicles] = useState([]),
     [busy, setBusy] = useState(true),
+    [saving, setSaving] = useState(false),
+    [submitting, setSubmitting] = useState(false),
     [note, setNote] = useState(null);
   useEffect(() => {
     (async () => {
@@ -257,7 +455,7 @@ export function ChecklistEditor({ user }) {
               templateItem,
             ]),
           );
-          const viewerName = user?.full_name || user?.username || "";
+          const viewerName = user?.full_name || user?.email || "";
           setForm({
             id: d.id,
             jenisKendaraan: d.jenis_kendaraan,
@@ -333,7 +531,7 @@ export function ChecklistEditor({ user }) {
             api.vehicles(),
           ]);
           setVehicles(vehicleResponse.data || []);
-          const viewerName = user?.full_name || user?.username || "";
+          const viewerName = user?.full_name || user?.email || "";
           setForm({
             ...emptyForm(jenis.toUpperCase()),
             viewerRole: user?.role || "",
@@ -362,7 +560,7 @@ export function ChecklistEditor({ user }) {
         setBusy(false);
       }
     })();
-  }, [id, jenis, user?.role, user?.full_name, user?.username]);
+  }, [id, jenis, user?.role, user?.full_name, user?.email]);
   const set = (k, v) => setForm({ ...form, [k]: v }),
     item = (i, p) =>
       setForm({
@@ -386,6 +584,7 @@ export function ChecklistEditor({ user }) {
         ekimValidUntil: "",
         emailKontraktor: "",
         statusKendaraan: "",
+        checklist: applyApprovedDocumentExpiries(current.checklist, null),
       }));
       return;
     }
@@ -409,8 +608,19 @@ export function ChecklistEditor({ user }) {
       ekimValidUntil: String(vehicle.ekim_valid_until || "").slice(0, 10),
       emailKontraktor: vehicle.email_kontraktor || "",
       statusKendaraan: vehicle.status || "",
+      checklist: applyApprovedDocumentExpiries(current.checklist, vehicle),
     }));
-    setNote(null);
+    const approvedExpiryCount = Object.keys(
+      vehicle.approved_document_expiries || {},
+    ).length;
+    setNote(
+      approvedExpiryCount
+        ? {
+            ok: true,
+            text: `${approvedExpiryCount} masa berlaku surat terverifikasi diisi otomatis dari dokumen yang telah disetujui SPV HSSE.`,
+          }
+        : null,
+    );
   };
   const save = async () => {
     setNote(null);
@@ -461,12 +671,50 @@ export function ChecklistEditor({ user }) {
       });
       return;
     }
+    setSaving(true);
     try {
       const r = await api.saveChecklist(form);
-      setNote({ ok: true, text: r.message });
+      const failedItems = form.checklist.filter((item) => item.tidak);
+      setNote({
+        ok: true,
+        text: failedItems.length
+          ? `Data berhasil disimpan sebagai draft. Terdapat ${failedItems.length} item Tidak Baik. Klik "Kirim Hasil Pemeriksaan" agar E-KIM ditetapkan ditolak dan notifikasi dikirim ke transportir.`
+          : r.message,
+      });
       if (!id) nav(`/checklists/${r.data.id}`, { replace: true });
     } catch (e) {
       setNote({ text: e.message });
+    } finally {
+      setSaving(false);
+    }
+  };
+  const submitResult = async () => {
+    if (!id || form.statusApproval !== "draft") {
+      setNote({ text: "Simpan formulir sebagai draft terlebih dahulu." });
+      return;
+    }
+    const failedItems = form.checklist.filter((item) => item.tidak);
+    const confirmationText = failedItems.length
+      ? `Terdapat ${failedItems.length} item Tidak Baik: ${failedItems.map((item) => item.nama).join(", ")}. Jika dilanjutkan, E-KIM akan ditolak dan transportir akan menerima notifikasi. Lanjutkan?`
+      : "Kirim hasil pemeriksaan ini ke proses persetujuan HSSE? Setelah dikirim, draft tidak dapat diedit.";
+    if (!window.confirm(confirmationText)) return;
+
+    setSubmitting(true);
+    setNote(null);
+    try {
+      const response = await api.workflow({
+        formulir_id: Number(id),
+        action: "submit",
+      });
+      setForm((current) => ({
+        ...current,
+        statusApproval: response.data.new_status,
+      }));
+      setNote({ ok: true, text: response.message });
+    } catch (error) {
+      setNote({ text: error.message });
+    } finally {
+      setSubmitting(false);
     }
   };
   const remove = async () => {
@@ -518,11 +766,23 @@ export function ChecklistEditor({ user }) {
         <button
           className="button primary"
           onClick={save}
-          disabled={form.statusApproval && form.statusApproval !== "draft"}
+          disabled={
+            saving ||
+            (form.statusApproval && form.statusApproval !== "draft")
+          }
         >
           <Save />
-          Simpan
+          {saving ? "Menyimpan..." : "Simpan"}
         </button>
+        {id && form.statusApproval === "draft" && (
+          <button
+            className="button secondary"
+            onClick={submitResult}
+            disabled={saving || submitting}
+          >
+            {submitting ? "Mengirim..." : "Kirim Hasil Pemeriksaan"}
+          </button>
+        )}
       </Head>
       <Notice value={note} />
       <section className="inspection-form-header">
@@ -742,12 +1002,30 @@ export function ChecklistEditor({ user }) {
           </table>
         </div>
       </section>
-      <ChecklistFooter form={form} setForm={setForm} id={id} onSave={save} />
+      <ChecklistFooter
+        form={form}
+        setForm={setForm}
+        id={id}
+        onSave={save}
+        saveNotice={note}
+        saving={saving}
+        submitting={submitting}
+        onSubmitResult={submitResult}
+      />
     </main>
   );
 }
 
-function ChecklistFooter({ form, setForm, id, onSave }) {
+function ChecklistFooter({
+  form,
+  setForm,
+  id,
+  onSave,
+  saveNotice,
+  saving,
+  submitting,
+  onSubmitResult,
+}) {
   const [message, setMessage] = useState(null);
   const [signing, setSigning] = useState("");
   const role = form.viewerRole || "";
@@ -907,7 +1185,8 @@ function ChecklistFooter({ form, setForm, id, onSave }) {
             <strong>TANDA TANGAN DINONAKTIFKAN</strong>
             Terdapat {tidakBaikItems.length} item berstatus Tidak Baik:{" "}
             {tidakBaikItems.map((item) => item.nama).join(", ")}. Perbaiki dan
-            ubah seluruh item tersebut menjadi Baik terlebih dahulu.
+            ubah seluruh item tersebut menjadi Baik terlebih dahulu. Data
+            masih dapat disimpan sebagai draft.
           </span>
         </div>
       )}
@@ -1050,7 +1329,7 @@ function ChecklistFooter({ form, setForm, id, onSave }) {
           </div>
         )}
       </div>
-      <Notice value={message} />
+      <Notice value={saveNotice || message} />
       <div className="checklist-footer-actions">
         <Link className="footer-action muted-action" to="/">
           Kembali ke Home
@@ -1061,10 +1340,19 @@ function ChecklistFooter({ form, setForm, id, onSave }) {
         <button
           className="footer-action save-action"
           onClick={onSave}
-          disabled={form.statusApproval !== "draft"}
+          disabled={saving || form.statusApproval !== "draft"}
         >
-          Simpan Data
+          {saving ? "Menyimpan..." : "Simpan Data"}
         </button>
+        {id && form.statusApproval === "draft" && (
+          <button
+            className="footer-action submit-action"
+            onClick={onSubmitResult}
+            disabled={saving || submitting}
+          >
+            {submitting ? "Mengirim..." : "Kirim Hasil Pemeriksaan"}
+          </button>
+        )}
         <button
           className="footer-action print-action"
           onClick={() => window.print()}
@@ -1116,18 +1404,21 @@ export function Approvals({ user }) {
       if (!reason) return;
     }
     try {
+      let result;
       if (action === "sign_hsse" || action === "approve_manager") {
         const name =
           prompt("Nama penandatangan:", user.full_name) || user.full_name;
         if (!name) return;
-        await api.saveSignature({
+        result = await api.saveSignature({
           formulir_id: row.id,
           role: action === "sign_hsse" ? "hsse" : "manajer",
           canvas_image: typedSignature(name),
           signer_name: name,
         });
-      } else await api.workflow({ formulir_id: row.id, action, reason });
-      setNote({ ok: true, text: "Status dokumen berhasil diperbarui." });
+      } else {
+        result = await api.workflow({ formulir_id: row.id, action, reason });
+      }
+      setNote({ ok: true, text: result.message });
       load();
     } catch (e) {
       setNote({ text: e.message });
@@ -1166,8 +1457,10 @@ export function Approvals({ user }) {
                     Setujui
                   </button>
                 )}
-              {["signed_hsse", "pending_hsse"].includes(r.status_approval) &&
-                ["admin", "manager_hsse"].includes(user.role) && (
+              {((r.status_approval === "pending_hsse" &&
+                ["admin", "hsse"].includes(user.role)) ||
+                (r.status_approval === "signed_hsse" &&
+                  ["admin", "manager_hsse"].includes(user.role))) && (
                   <button className="danger" onClick={() => act(r, "reject")}>
                     Tolak
                   </button>
@@ -1176,6 +1469,74 @@ export function Approvals({ user }) {
                 <button onClick={() => act(r, "reset_draft")}>Reset</button>
               )}
             </div>,
+          ])}
+        />
+      )}
+    </main>
+  );
+}
+
+export function ManagerApprovalHistory() {
+  const [state, setState] = useState({ busy: true, rows: [], error: "" });
+
+  const load = async () => {
+    setState((current) => ({ ...current, busy: true, error: "" }));
+    try {
+      const response = await api.checklists({ signedByMe: 1, limit: 100 });
+      setState({ busy: false, rows: response.data || [], error: "" });
+    } catch (error) {
+      setState({ busy: false, rows: [], error: error.message });
+    }
+  };
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  return (
+    <main className="page">
+      <Head
+        kicker="Riwayat Manager"
+        title="Riwayat persetujuan checklist"
+        text="Daftar formulir checklist yang telah Anda tanda tangani dan setujui."
+      >
+        <button className="button secondary" onClick={load} disabled={state.busy}>
+          <RefreshCw size={15} />
+          Perbarui
+        </button>
+      </Head>
+      {state.error && <Notice value={{ text: state.error }} />}
+      {state.busy ? (
+        <Busy />
+      ) : (
+        <DataTable
+          heads={[
+            "Kendaraan",
+            "Jenis",
+            "Transportir",
+            "Tanggal pemeriksaan",
+            "Ditandatangani HSSE",
+            "Ditandatangani Manager",
+            "Status",
+            "Aksi",
+          ]}
+          rows={state.rows.map((row) => [
+            row.nomor_polisi,
+            row.jenis_kendaraan,
+            row.nama_transport,
+            date(row.tanggal_pemeriksaan),
+            row.ttd_hsse_nama || "—",
+            <div>
+              <strong>{row.ttd_manajer_nama || "—"}</strong>
+              <small className="table-subtext">
+                {dateTime(row.ttd_manajer_timestamp)}
+              </small>
+            </div>,
+            status(row.status_approval),
+            <Link className="table-action-link" to={`/checklists/${row.id}`}>
+              <Eye size={15} />
+              Lihat formulir
+            </Link>,
           ])}
         />
       )}
@@ -1614,7 +1975,42 @@ export function ChecklistDataPage() {
 export function UsersPage({ currentUser }) {
   const { data, busy, load } = useLoad(api.users),
     [note, setNote] = useState(null),
-    [edit, setEdit] = useState(null);
+    [creating, setCreating] = useState(false),
+    [createForm, setCreateForm] = useState({
+      full_name: "",
+      email: "",
+      phone: "",
+      department: "",
+      position: "",
+      role: "hsse",
+      password: "",
+    }),
+    [showCreatePassword, setShowCreatePassword] = useState(false),
+    [edit, setEdit] = useState(null),
+    [resetTarget, setResetTarget] = useState(null),
+    [resetPassword, setResetPassword] = useState(""),
+    [showResetPassword, setShowResetPassword] = useState(false);
+  const submitCreate = async (e) => {
+    e.preventDefault();
+    try {
+      const response = await api.createUser(createForm);
+      setNote({ ok: true, text: response.message });
+      setCreating(false);
+      setShowCreatePassword(false);
+      setCreateForm({
+        full_name: "",
+        email: "",
+        phone: "",
+        department: "",
+        position: "",
+        role: "hsse",
+        password: "",
+      });
+      await load();
+    } catch (error) {
+      setNote({ text: error.message });
+    }
+  };
   const toggle = async (u) => {
     try {
       await api.toggleUser({
@@ -1626,26 +2022,36 @@ export function UsersPage({ currentUser }) {
       setNote({ text: e.message });
     }
   };
-  const reset = async (u) => {
-    const p = prompt(`Password baru untuk ${u.username}:`);
-    if (!p) return;
+  const reset = (u) => {
+    setEdit(null);
+    setResetTarget(u);
+    setResetPassword("");
+    setShowResetPassword(false);
+  };
+  const submitReset = async (e) => {
+    e.preventDefault();
     try {
-      await api.resetPassword({ user_id: u.id, new_password: p });
+      await api.resetPassword({
+        user_id: resetTarget.id,
+        new_password: resetPassword,
+      });
       setNote({ ok: true, text: "Password berhasil direset." });
+      setResetTarget(null);
+      setResetPassword("");
     } catch (e) {
       setNote({ text: e.message });
     }
   };
   const remove = async (u) => {
     const confirmed = window.confirm(
-      `Hapus pengguna ${u.full_name} (${u.username}) secara permanen?\n\nRiwayat checklist dan audit tetap disimpan, tetapi akun tidak dapat dipulihkan.`,
+      `Hapus pengguna ${u.full_name} (${u.email}) secara permanen?\n\nRiwayat checklist dan audit tetap disimpan, tetapi akun tidak dapat dipulihkan.`,
     );
     if (!confirmed) return;
 
     try {
       await api.deleteUser(u.id);
       if (edit?.id === u.id) setEdit(null);
-      setNote({ ok: true, text: `Pengguna ${u.username} berhasil dihapus.` });
+      setNote({ ok: true, text: `Pengguna ${u.email} berhasil dihapus.` });
       await load();
     } catch (e) {
       setNote({ text: e.message });
@@ -1667,8 +2073,169 @@ export function UsersPage({ currentUser }) {
         kicker="Administrasi"
         title="Kelola pengguna"
         text="Role, status akun, dan reset kredensial."
-      />
+      >
+        <button
+          className="button primary"
+          type="button"
+          onClick={() => {
+            setEdit(null);
+            setResetTarget(null);
+            setCreating((value) => !value);
+          }}
+        >
+          <Plus /> Daftarkan pengguna
+        </button>
+      </Head>
       <Notice value={note} />
+      {creating && (
+        <section className="panel">
+          <form className="form-grid" onSubmit={submitCreate}>
+            <div className="full">
+              <p className="eyebrow red">Akun baru</p>
+              <h2>Daftarkan Tim HSSE atau Transportir</h2>
+              <p className="muted">
+                Akun dibuat oleh SPV HSSE dan langsung berstatus aktif.
+              </p>
+            </div>
+            {[
+              ["full_name", "Nama lengkap", true],
+              ["email", "Email", true],
+              ["phone", "Nomor telepon", false],
+              ["department", "Departemen/perusahaan", false],
+              ["position", "Jabatan", false],
+            ].map(([key, label, required]) => (
+              <label key={key}>
+                {label}
+                <input
+                  type={key === "email" ? "email" : "text"}
+                  value={createForm[key]}
+                  onChange={(e) =>
+                    setCreateForm({ ...createForm, [key]: e.target.value })
+                  }
+                  required={required}
+                />
+              </label>
+            ))}
+            <label>
+              Jenis akun
+              <select
+                value={createForm.role}
+                onChange={(e) =>
+                  setCreateForm({ ...createForm, role: e.target.value })
+                }
+              >
+                <option value="hsse">Tim HSSE</option>
+                <option value="pengurus">Transportir</option>
+              </select>
+            </label>
+            <label>
+              Password awal
+              <span className="password-input-wrap">
+                <input
+                  type={showCreatePassword ? "text" : "password"}
+                  value={createForm.password}
+                  onChange={(e) =>
+                    setCreateForm({ ...createForm, password: e.target.value })
+                  }
+                  minLength="8"
+                  maxLength="100"
+                  autoComplete="new-password"
+                  required
+                />
+                <button
+                  type="button"
+                  className="password-toggle"
+                  onClick={() => setShowCreatePassword((value) => !value)}
+                  aria-label={
+                    showCreatePassword
+                      ? "Sembunyikan password"
+                      : "Tampilkan password"
+                  }
+                >
+                  {showCreatePassword ? <EyeOff size={19} /> : <Eye size={19} />}
+                </button>
+              </span>
+              <small className="password-requirements">
+                Minimal 8 karakter, terdiri dari huruf besar, huruf kecil,
+                angka, dan simbol.
+              </small>
+            </label>
+            <div className="row-buttons full">
+              <button className="button primary">Buat akun</button>
+              <button type="button" onClick={() => setCreating(false)}>
+                Batal
+              </button>
+            </div>
+          </form>
+        </section>
+      )}
+      {resetTarget && (
+        <section className="panel">
+          <form className="form-grid" onSubmit={submitReset}>
+            <div className="full">
+              <p className="eyebrow red">Reset password</p>
+              <h2>{resetTarget.full_name}</h2>
+              <p className="muted">{resetTarget.email}</p>
+            </div>
+            <label className="full">
+              Password baru
+              <span className="password-input-wrap">
+                <input
+                  type={showResetPassword ? "text" : "password"}
+                  value={resetPassword}
+                  onChange={(e) => setResetPassword(e.target.value)}
+                  minLength="8"
+                  maxLength="100"
+                  autoComplete="new-password"
+                  aria-describedby="reset-password-requirements"
+                  required
+                  autoFocus
+                />
+                <button
+                  type="button"
+                  className="password-toggle"
+                  onClick={() => setShowResetPassword((value) => !value)}
+                  aria-label={
+                    showResetPassword
+                      ? "Sembunyikan password"
+                      : "Tampilkan password"
+                  }
+                  title={
+                    showResetPassword
+                      ? "Sembunyikan password"
+                      : "Tampilkan password"
+                  }
+                >
+                  {showResetPassword ? (
+                    <EyeOff size={19} />
+                  ) : (
+                    <Eye size={19} />
+                  )}
+                </button>
+              </span>
+              <small
+                id="reset-password-requirements"
+                className="password-requirements"
+              >
+                Minimal 8 karakter, terdiri dari huruf besar, huruf kecil,
+                angka, dan simbol.
+              </small>
+            </label>
+            <div className="row-buttons full">
+              <button className="button primary">Simpan password</button>
+              <button
+                type="button"
+                onClick={() => {
+                  setResetTarget(null);
+                  setResetPassword("");
+                }}
+              >
+                Batal
+              </button>
+            </div>
+          </form>
+        </section>
+      )}
       {edit && (
         <section className="panel">
           <form className="form-grid" onSubmit={save}>
@@ -1716,16 +2283,22 @@ export function UsersPage({ currentUser }) {
           rows={(data || []).map((u) => [
             <>
               <strong>{u.full_name}</strong>
-              <small>{u.username}</small>
+              <small>{u.email}</small>
             </>,
             <>
-              <span>{u.email}</span>
               <small>{u.phone}</small>
             </>,
             roles[u.role],
             status(u.status),
             <div className="row-buttons">
-              <button onClick={() => setEdit(u)}>Edit</button>
+              <button
+                onClick={() => {
+                  setResetTarget(null);
+                  setEdit(u);
+                }}
+              >
+                Edit
+              </button>
               <button onClick={() => toggle(u)}>
                 {u.status === "active" ? "Nonaktifkan" : "Aktifkan"}
               </button>
@@ -1736,11 +2309,11 @@ export function UsersPage({ currentUser }) {
               <button
                 className="danger"
                 onClick={() => remove(u)}
-                disabled={u.id === currentUser?.id || u.username === "admin"}
+                disabled={u.id === currentUser?.id || u.is_primary_admin}
                 title={
                   u.id === currentUser?.id
                     ? "Akun yang sedang digunakan tidak dapat dihapus"
-                    : u.username === "admin"
+                    : u.is_primary_admin
                       ? "Akun admin utama tidak dapat dihapus"
                       : "Hapus pengguna"
                 }
@@ -2450,7 +3023,8 @@ export function SettingsPage() {
 export function NotificationsPage() {
   const state = useLoad(api.notifications),
     [form, setForm] = useState(null),
-    [note, setNote] = useState(null);
+    [note, setNote] = useState(null),
+    [showSmtpPassword, setShowSmtpPassword] = useState(false);
   useEffect(() => {
     if (state.data) setForm({ ...state.data.config, smtp_password: "" });
   }, [state.data]);
@@ -2459,6 +3033,7 @@ export function NotificationsPage() {
     try {
       const r = await api.saveNotifications(form);
       setNote({ ok: true, text: r.message });
+      await state.load();
     } catch (x) {
       setNote({ text: x.message });
     }
@@ -2481,29 +3056,69 @@ export function NotificationsPage() {
         <Busy />
       ) : (
         <>
+          {!state.data.smtp_ready && (
+            <Notice
+              value={{
+                text: "SMTP belum lengkap. Lengkapi konfigurasi berikut agar notifikasi EKIM benar-benar terkirim melalui email.",
+              }}
+            />
+          )}
           <section className="panel">
             <form className="form-grid" onSubmit={save}>
               {[
                 ["smtp_host", "SMTP host"],
                 ["smtp_port", "Port"],
-                ["smtp_username", "Username SMTP"],
-                ["smtp_password", "Password SMTP"],
+                ["smtp_username", "Akun SMTP (opsional)"],
+                ["smtp_password", "Password SMTP (opsional)"],
                 ["smtp_from_email", "Email pengirim"],
                 ["smtp_from_name", "Nama pengirim"],
                 ["notif_days_threshold", "Ambang hari"],
               ].map(([k, l]) => (
                 <label>
                   {l}
-                  <input
-                    type={k === "smtp_password" ? "password" : "text"}
-                    value={form[k] || ""}
-                    placeholder={
-                      k === "smtp_password"
-                        ? "Kosongkan untuk mempertahankan password"
-                        : ""
-                    }
-                    onChange={(e) => setForm({ ...form, [k]: e.target.value })}
-                  />
+                  {k === "smtp_password" ? (
+                    <span className="password-input-wrap">
+                      <input
+                        type={showSmtpPassword ? "text" : "password"}
+                        value={form[k] || ""}
+                        placeholder="Kosongkan untuk mempertahankan password"
+                        onChange={(e) =>
+                          setForm({ ...form, [k]: e.target.value })
+                        }
+                      />
+                      <button
+                        type="button"
+                        className="password-toggle"
+                        onClick={() =>
+                          setShowSmtpPassword((value) => !value)
+                        }
+                        aria-label={
+                          showSmtpPassword
+                            ? "Sembunyikan password SMTP"
+                            : "Tampilkan password SMTP"
+                        }
+                        title={
+                          showSmtpPassword
+                            ? "Sembunyikan password SMTP"
+                            : "Tampilkan password SMTP"
+                        }
+                      >
+                        {showSmtpPassword ? (
+                          <EyeOff size={19} />
+                        ) : (
+                          <Eye size={19} />
+                        )}
+                      </button>
+                    </span>
+                  ) : (
+                    <input
+                      type="text"
+                      value={form[k] || ""}
+                      onChange={(e) =>
+                        setForm({ ...form, [k]: e.target.value })
+                      }
+                    />
+                  )}
                 </label>
               ))}
               <label>
@@ -2522,12 +3137,24 @@ export function NotificationsPage() {
               <button className="button primary full">
                 Simpan konfigurasi
               </button>
+              {form.smtp_host === "mailpit" && (
+                <p className="muted full">
+                  Mode email lokal aktif. Email pengujian dapat dilihat di{" "}
+                  <a href="http://127.0.0.1:8025" target="_blank" rel="noreferrer">
+                    inbox Mailpit
+                  </a>
+                  . Email tidak diteruskan ke alamat penerima sebenarnya.
+                </p>
+              )}
             </form>
           </section>
           <section className="panel">
             <h2>Scheduler</h2>
             <p className="muted">
               Terakhir berjalan: {state.data.cron_last_run || "Belum pernah"}
+            </p>
+            <p className="muted">
+              Status terakhir: {state.data.cron_last_status || "Belum ada hasil"}
             </p>
             <input readOnly value={state.data.cron_url} />
             <button className="button secondary" onClick={cron}>
@@ -2563,9 +3190,8 @@ export function VehiclesPage() {
     produk_kapasitas: "",
     nama_transport: "",
     email_kontraktor: "",
-    ekim_valid_until: "",
     status: "AKTIF",
-    username_transportir: "",
+    user_id_transportir: "",
   };
   const save = async (e) => {
     e.preventDefault();
@@ -2637,9 +3263,9 @@ export function VehiclesPage() {
             <label>
               Akun pengurus
               <select
-                value={edit.username_transportir || ""}
+                value={edit.user_id_transportir || ""}
                 onChange={(e) =>
-                  setEdit({ ...edit, username_transportir: e.target.value })
+                  setEdit({ ...edit, user_id_transportir: e.target.value })
                 }
                 required
               >
@@ -2647,21 +3273,11 @@ export function VehiclesPage() {
                 {(users.data || [])
                   .filter((u) => u.role === "pengurus" && u.status === "active")
                   .map((u) => (
-                    <option value={u.username}>
-                      {u.full_name} ({u.username})
+                    <option key={u.id} value={u.id}>
+                      {u.full_name} ({u.email})
                     </option>
                   ))}
               </select>
-            </label>
-            <label>
-              EKIM berlaku
-              <input
-                type="date"
-                value={String(edit.ekim_valid_until || "").slice(0, 10)}
-                onChange={(e) =>
-                  setEdit({ ...edit, ekim_valid_until: e.target.value })
-                }
-              />
             </label>
             <label>
               Status
@@ -2732,8 +3348,10 @@ export function VehicleRegistrationPage() {
       produk_kapasitas: "",
       nama_transport: "",
       email_kontraktor: "",
+      user_id_transportir: "",
     },
     state = useLoad(api.userVehicles),
+    transporters = useLoad(api.transporters),
     [form, setForm] = useState(initialForm),
     [note, setNote] = useState(null),
     [saving, setSaving] = useState(false);
@@ -2829,6 +3447,39 @@ export function VehicleRegistrationPage() {
               required
             />
           </label>
+          <label>
+            Akun transportir/pengurus
+            <select
+              value={form.user_id_transportir}
+              onChange={(e) => {
+                const userId = e.target.value;
+                const account = (transporters.data || []).find(
+                  (item) => String(item.id) === userId,
+                );
+                setForm((current) => ({
+                  ...current,
+                  user_id_transportir: userId,
+                  email_kontraktor:
+                    account?.email || current.email_kontraktor,
+                }));
+              }}
+              disabled={transporters.busy}
+              required
+            >
+              <option value="">
+                {transporters.busy ? "Memuat akun…" : "Pilih akun transportir"}
+              </option>
+              {(transporters.data || []).map((account) => (
+                <option key={account.id} value={account.id}>
+                  {account.full_name} ({account.email})
+                </option>
+              ))}
+            </select>
+            <small>
+              Kendaraan otomatis muncul pada akun ini untuk pengelolaan dan
+              pembaruan dokumen.
+            </small>
+          </label>
           <label className="registration-email-field">
             Email kontraktor/PJ
             <input
@@ -2863,6 +3514,7 @@ export function VehicleRegistrationPage() {
               "Kendaraan",
               "Jenis",
               "Transportir",
+              "Akun transportir",
               "Produk/Kapasitas",
               "Status",
               "Tanggal daftar",
@@ -2876,6 +3528,14 @@ export function VehicleRegistrationPage() {
               </>,
               vehicle.jenis,
               vehicle.nama_transport || "—",
+              vehicle.akun_transportir ? (
+                <>
+                  <strong>{vehicle.akun_transportir}</strong>
+                  <small>{vehicle.email_akun_transportir}</small>
+                </>
+              ) : (
+                "Belum ditetapkan"
+              ),
               vehicle.produk_kapasitas || "—",
               status(vehicle.status),
               date(vehicle.created_at),
@@ -2886,6 +3546,107 @@ export function VehicleRegistrationPage() {
     </main>
   );
 }
+export function EkimNotificationsPage() {
+  const state = useLoad(api.ekimNotifications),
+    [note, setNote] = useState(null);
+  const markRead = async (id = null) => {
+    try {
+      const response = await api.readEkimNotifications(id);
+      setNote({ ok: true, text: response.message });
+      await state.load();
+    } catch (error) {
+      setNote({ text: error.message });
+    }
+  };
+  const notifications = state.data?.notifications || [];
+  const unreadCount = Number(state.data?.unread_count || 0);
+  useEffect(() => {
+    window.dispatchEvent(
+      new CustomEvent("ekim-notifications-updated", {
+        detail: unreadCount,
+      }),
+    );
+  }, [unreadCount]);
+  const notificationDate = (value) =>
+    value
+      ? new Intl.DateTimeFormat("id-ID", {
+          dateStyle: "medium",
+          timeStyle: "short",
+        }).format(new Date(value))
+      : "-";
+
+  return (
+    <main className="page">
+      <Head
+        kicker="Akun transportir"
+        title="Notifikasi E-KIM"
+        text="Pantau hasil penerbitan dan penolakan E-KIM kendaraan yang Anda kelola."
+      >
+        <button
+          className="button secondary"
+          type="button"
+          disabled={!unreadCount}
+          onClick={() => markRead()}
+        >
+          <Check /> Tandai semua dibaca
+        </button>
+      </Head>
+      <Notice value={note} />
+      {state.busy ? (
+        <Busy />
+      ) : (
+        <section className="panel ekim-notification-panel">
+          <div className="ekim-notification-summary">
+            <Bell />
+            <div>
+              <strong>{unreadCount} notifikasi baru</strong>
+              <span>{notifications.length} notifikasi terakhir ditampilkan</span>
+            </div>
+          </div>
+          {notifications.length ? (
+            <div className="ekim-notification-list">
+              {notifications.map((notification) => {
+                const issued = notification.status === "issued";
+                return (
+                  <article
+                    className={`${issued ? "issued" : "rejected"} ${!notification.is_read ? "is-new" : ""}`}
+                    key={notification.id}
+                  >
+                    <div className="ekim-notification-icon">
+                      {issued ? <Check /> : <X />}
+                    </div>
+                    <div className="ekim-notification-copy">
+                      <div>
+                        <strong>
+                          {issued ? "E-KIM disetujui" : "E-KIM ditolak"}
+                        </strong>
+                        {!notification.is_read && <em>Baru</em>}
+                      </div>
+                      <span>{notification.nomor_polisi}</span>
+                      <p>{notification.pesan}</p>
+                      <small>{notificationDate(notification.created_at)}</small>
+                    </div>
+                    {!notification.is_read && (
+                      <button
+                        type="button"
+                        onClick={() => markRead(notification.id)}
+                      >
+                        Tandai dibaca
+                      </button>
+                    )}
+                  </article>
+                );
+              })}
+            </div>
+          ) : (
+            <div className="state">Belum ada notifikasi status E-KIM.</div>
+          )}
+        </section>
+      )}
+    </main>
+  );
+}
+
 export function MyVehiclesPage() {
   const state = useLoad(api.myVehicles),
     [form, setForm] = useState({ nomor_polisi: "", nama_transport: "" }),
