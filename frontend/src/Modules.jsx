@@ -374,7 +374,11 @@ export function ResetPasswordPage() {
                       type="button"
                       className="password-toggle"
                       onClick={() => setShowPassword((value) => !value)}
-                      aria-label={showPassword ? "Sembunyikan password" : "Tampilkan password"}
+                      aria-label={
+                        showPassword
+                          ? "Sembunyikan password"
+                          : "Tampilkan password"
+                      }
                     >
                       {showPassword ? <EyeOff size={19} /> : <Eye size={19} />}
                     </button>
@@ -767,8 +771,7 @@ export function ChecklistEditor({ user }) {
           className="button primary"
           onClick={save}
           disabled={
-            saving ||
-            (form.statusApproval && form.statusApproval !== "draft")
+            saving || (form.statusApproval && form.statusApproval !== "draft")
           }
         >
           <Save />
@@ -1185,8 +1188,8 @@ function ChecklistFooter({
             <strong>TANDA TANGAN DINONAKTIFKAN</strong>
             Terdapat {tidakBaikItems.length} item berstatus Tidak Baik:{" "}
             {tidakBaikItems.map((item) => item.nama).join(", ")}. Perbaiki dan
-            ubah seluruh item tersebut menjadi Baik terlebih dahulu. Data
-            masih dapat disimpan sebagai draft.
+            ubah seluruh item tersebut menjadi Baik terlebih dahulu. Data masih
+            dapat disimpan sebagai draft.
           </span>
         </div>
       )}
@@ -1461,10 +1464,10 @@ export function Approvals({ user }) {
                 ["admin", "hsse"].includes(user.role)) ||
                 (r.status_approval === "signed_hsse" &&
                   ["admin", "manager_hsse"].includes(user.role))) && (
-                  <button className="danger" onClick={() => act(r, "reject")}>
-                    Tolak
-                  </button>
-                )}
+                <button className="danger" onClick={() => act(r, "reject")}>
+                  Tolak
+                </button>
+              )}
               {user.role === "admin" && r.status_approval !== "approved" && (
                 <button onClick={() => act(r, "reset_draft")}>Reset</button>
               )}
@@ -1500,7 +1503,11 @@ export function ManagerApprovalHistory() {
         title="Riwayat persetujuan checklist"
         text="Daftar formulir checklist yang telah Anda tanda tangani dan setujui."
       >
-        <button className="button secondary" onClick={load} disabled={state.busy}>
+        <button
+          className="button secondary"
+          onClick={load}
+          disabled={state.busy}
+        >
           <RefreshCw size={15} />
           Perbarui
         </button>
@@ -1990,6 +1997,7 @@ export function UsersPage({ currentUser }) {
     [resetTarget, setResetTarget] = useState(null),
     [resetPassword, setResetPassword] = useState(""),
     [showResetPassword, setShowResetPassword] = useState(false);
+  const isProtectedRole = (role) => ["admin", "manager_hsse"].includes(role);
   const submitCreate = async (e) => {
     e.preventDefault();
     try {
@@ -2152,7 +2160,11 @@ export function UsersPage({ currentUser }) {
                       : "Tampilkan password"
                   }
                 >
-                  {showCreatePassword ? <EyeOff size={19} /> : <Eye size={19} />}
+                  {showCreatePassword ? (
+                    <EyeOff size={19} />
+                  ) : (
+                    <Eye size={19} />
+                  )}
                 </button>
               </span>
               <small className="password-requirements">
@@ -2206,11 +2218,7 @@ export function UsersPage({ currentUser }) {
                       : "Tampilkan password"
                   }
                 >
-                  {showResetPassword ? (
-                    <EyeOff size={19} />
-                  ) : (
-                    <Eye size={19} />
-                  )}
+                  {showResetPassword ? <EyeOff size={19} /> : <Eye size={19} />}
                 </button>
               </span>
               <small
@@ -2257,14 +2265,24 @@ export function UsersPage({ currentUser }) {
             ))}
             <label>
               Role
-              <select
-                value={edit.role}
-                onChange={(e) => setEdit({ ...edit, role: e.target.value })}
-              >
-                {Object.entries(roles).map(([v, l]) => (
-                  <option value={v}>{l}</option>
-                ))}
-              </select>
+              {isProtectedRole(edit.role) || edit.role === "user" ? (
+                <>
+                  <input value={roles[edit.role] || edit.role} disabled />
+                  <small className="muted">
+                    {edit.role === "user"
+                      ? "Role lama tidak dapat dipilih untuk akun baru atau diubah dari halaman ini."
+                      : "Role akun SPV HSSE dan Manager dikunci oleh sistem."}
+                  </small>
+                </>
+              ) : (
+                <select
+                  value={edit.role}
+                  onChange={(e) => setEdit({ ...edit, role: e.target.value })}
+                >
+                  <option value="hsse">Tim HSSE</option>
+                  <option value="pengurus">Transportir</option>
+                </select>
+              )}
             </label>
             <div className="row-buttons full">
               <button className="button primary">Simpan</button>
@@ -3089,9 +3107,7 @@ export function NotificationsPage() {
                       <button
                         type="button"
                         className="password-toggle"
-                        onClick={() =>
-                          setShowSmtpPassword((value) => !value)
-                        }
+                        onClick={() => setShowSmtpPassword((value) => !value)}
                         aria-label={
                           showSmtpPassword
                             ? "Sembunyikan password SMTP"
@@ -3140,7 +3156,11 @@ export function NotificationsPage() {
               {form.smtp_host === "mailpit" && (
                 <p className="muted full">
                   Mode email lokal aktif. Email pengujian dapat dilihat di{" "}
-                  <a href="http://127.0.0.1:8025" target="_blank" rel="noreferrer">
+                  <a
+                    href="http://127.0.0.1:8025"
+                    target="_blank"
+                    rel="noreferrer"
+                  >
                     inbox Mailpit
                   </a>
                   . Email tidak diteruskan ke alamat penerima sebenarnya.
@@ -3154,7 +3174,8 @@ export function NotificationsPage() {
               Terakhir berjalan: {state.data.cron_last_run || "Belum pernah"}
             </p>
             <p className="muted">
-              Status terakhir: {state.data.cron_last_status || "Belum ada hasil"}
+              Status terakhir:{" "}
+              {state.data.cron_last_status || "Belum ada hasil"}
             </p>
             <input readOnly value={state.data.cron_url} />
             <button className="button secondary" onClick={cron}>
@@ -3459,8 +3480,7 @@ export function VehicleRegistrationPage() {
                 setForm((current) => ({
                   ...current,
                   user_id_transportir: userId,
-                  email_kontraktor:
-                    account?.email || current.email_kontraktor,
+                  email_kontraktor: account?.email || current.email_kontraktor,
                 }));
               }}
               disabled={transporters.busy}
@@ -3600,7 +3620,9 @@ export function EkimNotificationsPage() {
             <Bell />
             <div>
               <strong>{unreadCount} notifikasi baru</strong>
-              <span>{notifications.length} notifikasi terakhir ditampilkan</span>
+              <span>
+                {notifications.length} notifikasi terakhir ditampilkan
+              </span>
             </div>
           </div>
           {notifications.length ? (

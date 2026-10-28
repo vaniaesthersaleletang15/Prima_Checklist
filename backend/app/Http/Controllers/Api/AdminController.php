@@ -136,16 +136,33 @@ class AdminController extends Controller
     public function updateUser(Request $r, int $id): JsonResponse
     {
         $this->admin($r);
-        $r->merge(['email' => strtolower(trim((string) $r->email))]);
-        $v = Validator::make($r->all(), ['full_name' => 'required|max:100', 'email' => ['required', 'email', 'max:100', Rule::unique('users', 'email')->ignore($id)], 'phone' => 'nullable|max:20', 'department' => 'nullable|max:100', 'position' => 'nullable|max:100', 'role' => ['required', Rule::in(['admin', 'user', 'pengurus', 'hsse', 'manager_hsse'])]]);
-        if ($v->fails()) {
-            return $this->fail($v->errors()->first(), 422, $v->errors());
-        }$u = User::find($id);
+        $u = User::find($id);
         if (! $u) {
             return $this->fail('User tidak ditemukan.', 404);
-        }if ($u->username === 'admin' && $r->role !== 'admin') {
-            return $this->fail('Role akun admin utama tidak dapat diubah.', 409);
-        }$u->fill($r->only('full_name', 'email', 'phone', 'department', 'position', 'role'))->fill(['email' => strtolower(trim((string) $r->email))])->save();
+        }
+
+        $r->merge(['email' => strtolower(trim((string) $r->email))]);
+        $protectedRole = in_array($u->role, ['admin', 'manager_hsse', 'user'], true);
+        $allowedRoles = $protectedRole ? [$u->role] : ['hsse', 'pengurus'];
+        $v = Validator::make($r->all(), [
+            'full_name' => ['required', 'string', 'max:100'],
+            'email' => ['required', 'email', 'max:100', Rule::unique('users', 'email')->ignore($id)],
+            'phone' => ['nullable', 'string', 'max:20'],
+            'department' => ['nullable', 'string', 'max:100'],
+            'position' => ['nullable', 'string', 'max:100'],
+            'role' => ['required', Rule::in($allowedRoles)],
+        ], [
+            'role.in' => $protectedRole
+                ? 'Role akun ini dikunci dan tidak dapat diubah.'
+                : 'Role hanya dapat dipilih sebagai Tim HSSE atau Transportir.',
+        ]);
+        if ($v->fails()) {
+            return $this->fail($v->errors()->first(), 422, $v->errors());
+        }
+
+        $u->fill($r->only('full_name', 'email', 'phone', 'department', 'position', 'role'))
+            ->fill(['email' => strtolower(trim((string) $r->email))])
+            ->save();
         $this->audit($r, 'USER_UPDATE', "Akun {$u->username} diperbarui");
 
         return $this->ok('Data pengguna berhasil diperbarui.');

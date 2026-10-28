@@ -149,6 +149,48 @@ class PrimaApiTest extends TestCase
         $this->assertDatabaseHas('users', ['id' => $manager->id, 'email' => 'manager-new@example.test']);
     }
 
+    public function test_spv_cannot_assign_protected_or_legacy_roles_from_user_management(): void
+    {
+        [, $token] = $this->login('admin', 'spv_role_guard');
+        $hsse = User::create(['username' => 'role_guard_hsse', 'full_name' => 'Petugas HSSE', 'email' => 'role-guard@example.test', 'password' => 'Secret123!', 'role' => 'hsse', 'status' => 'active']);
+
+        foreach (['admin', 'manager_hsse', 'user'] as $forbiddenRole) {
+            $this->withToken($token)->putJson("/api/v1/users/{$hsse->id}", [
+                'full_name' => $hsse->full_name,
+                'email' => $hsse->email,
+                'role' => $forbiddenRole,
+            ])->assertStatus(422);
+        }
+
+        $this->withToken($token)->putJson("/api/v1/users/{$hsse->id}", [
+            'full_name' => $hsse->full_name,
+            'email' => $hsse->email,
+            'role' => 'pengurus',
+        ])->assertOk();
+
+        $this->assertDatabaseHas('users', ['id' => $hsse->id, 'role' => 'pengurus']);
+    }
+
+    public function test_spv_and_manager_roles_are_locked_during_profile_updates(): void
+    {
+        [$spv, $token] = $this->login('admin', 'spv_locked_role');
+        $manager = User::create(['username' => 'manager_locked_role', 'full_name' => 'Manager', 'email' => 'manager-locked@example.test', 'password' => 'Secret123!', 'role' => 'manager_hsse', 'status' => 'active']);
+
+        $this->withToken($token)->putJson("/api/v1/users/{$spv['id']}", [
+            'full_name' => $spv['full_name'],
+            'email' => $spv['email'],
+            'role' => 'hsse',
+        ])->assertStatus(422);
+        $this->withToken($token)->putJson("/api/v1/users/{$manager->id}", [
+            'full_name' => $manager->full_name,
+            'email' => $manager->email,
+            'role' => 'pengurus',
+        ])->assertStatus(422);
+
+        $this->assertDatabaseHas('users', ['id' => $spv['id'], 'role' => 'admin']);
+        $this->assertDatabaseHas('users', ['id' => $manager->id, 'role' => 'manager_hsse']);
+    }
+
     public function test_transportir_can_reset_password_with_one_time_token(): void
     {
         $user = User::create(['username' => 'forgot_owner', 'full_name' => 'Forgot Owner', 'email' => 'forgot-owner@example.test', 'password' => 'OldSecret123!', 'role' => 'pengurus', 'status' => 'active']);
